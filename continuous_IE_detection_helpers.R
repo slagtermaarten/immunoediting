@@ -1,5 +1,5 @@
 IE_requires_computation <- mod_time_comparator(
-  minimum_mod_time = '2021-4-02 06:58', verbose = TRUE)
+  minimum_mod_time = '2021-4-02 10:40', verbose = TRUE)
 
 ## {{{ Constants 
 scalar_analysis_components <- c('test_yr', 'p_val', 'p_val_no_reg',
@@ -402,14 +402,14 @@ fit_rlm_ <- function(dtf, simple_output = F) {
   delta_names <- 
     paste0('delta_', c('CI_l', 'mean', 'CI_h'), sep = '') %>%
     c('delta_SE')
-  NMAD_eval_locs <- seq(0.1, .5, by = .1)
-  NMAD_names <- paste('NMAD_prob_', 10 * NMAD_eval_locs, sep = '')
+  NMADR_eval_locs <- quants %>%
+    { setNames(., paste('NMADR_q', 100 * ., sep = '')) }
 
   if (is.null(lc)) {
     AFDP_def <- map(quants, ~NA_real_) %>%
       setNames(paste0('AFDP_', 100*quants, sep = ''))
     delta_def <- map(auto_name(delta_names), ~NA_real_)
-    NMAD_def <- map(auto_name(NMAD_names), ~NA_real_)
+    NMADR_def <- map(NMADR_eval_locs, ~NA_real_)
     return(list(
       'intercept' = NA_real_,
       'p_val_intercept' = NA_real_,
@@ -422,7 +422,7 @@ fit_rlm_ <- function(dtf, simple_output = F) {
       'yr_fractional_change' = NA_real_,
       'scale' = NA_real_,
       'norm_scale' = NA_real_
-    ) %>% c(AFDP_def) %>% c(delta_def) %>% c(NMAD_def)) 
+    ) %>% c(AFDP_def) %>% c(delta_def) %>% c(NMADR_def)) 
   }
 
   ## Compute absolute fractional difference between predictions (AFDP)
@@ -449,14 +449,15 @@ fit_rlm_ <- function(dtf, simple_output = F) {
     append(list(delta$se.fit)) %>%
     setNames(delta_names)
 
+  ## Median of absolute residuals AFTER RLM convergence
+  MADR <- median(abs(residuals(lc)))
   intercept <- predict(lc, 
     newdata = data.frame(ol = 0), se.fit = T)
-  ## What is the probability that NMAD is smaller than or equal to the
-  ## the upper boundaries defined in NMAD_eval_locs?
-  NMAD_probs <- pnorm(NMAD_eval_locs, mean = lc$s / intercept$fit, 
+  ## Evaluate F_NMADR(NMADR)
+  NMADR_probs <- qnorm(NMADR_eval_locs, 
+    mean = MADR / intercept$fit, 
     sd = intercept$se.fit) %>%
-    as.list %>%
-    setNames(NMAD_names)
+    as.list
 
   return(list(
     'lm' = lc,
@@ -471,7 +472,7 @@ fit_rlm_ <- function(dtf, simple_output = F) {
     'yr_fractional_change' = coef_mat[2, 1] / coef_mat[1, 1],
     'scale' = lc$s,
     'norm_scale' = lc$s / coef_mat[1, 1]
-  ) %>% c(AFDP_stats) %>% c(delta) %>% c(NMAD_probs))
+  ) %>% c(AFDP_stats) %>% c(delta) %>% c(NMADR_probs))
 }
 
 
@@ -1577,6 +1578,7 @@ filter_coef_overview <- function(
   AFDP_50_filter = NULL,
   AFDP_75_filter = NULL,
   AFDP_90_filter = NULL,
+  NMADR_q75_filter = NULL,
   adaptive_scale_filter = FALSE,
   min_patients = NULL,
   min_project_size = NULL) {
@@ -1646,6 +1648,19 @@ filter_coef_overview <- function(
       print_overview_stats(dtf,
         plot_fishtails = plot_fishtails,
         stage_id = 'After scale filtering'
+      )
+  }
+
+  if (!is.null(NMADR_q75_filter)) {
+    dtf <- perform_filter_coef_overview(
+      dtf = dtf,
+      print_messages = print_messages,
+      code = NMADR_q75 <= NMADR_q75_filter
+    )
+    if (print_messages)
+      print_overview_stats(dtf,
+        plot_fishtails = plot_fishtails,
+        stage_id = 'After NMADR_q75 filtering'
       )
   }
 
