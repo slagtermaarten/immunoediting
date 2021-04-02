@@ -950,8 +950,9 @@ prep_continuous_param_grid <- function(
     ## `test_continuous_IE` can return bare Bayesian model fits or
     ## lists of summary stats already extracted from these fits. Both
     ## scenarios are accounted for here.
-    if (all(purrr::map(lol, class) == 'brmsfit')) {
+    if (length(lol) > 0 && all(purrr::map(lol, class) == 'brmsfit')) {
       if (T) {
+        ## 2021-04-02 11:49 This shouldn't occur anymore
         o_fn <- gen_cont_IE_fn(
           base_name = 'cont-IE',
           focus_allele = focus_allele,
@@ -965,7 +966,7 @@ prep_continuous_param_grid <- function(
           patient_inclusion_crit = patient_inclusion_crit,
           overlap_var = overlap_var
         )
-        warning(o_fn)
+        stop(o_fn)
         file.remove(o_fn)
         return(NULL)
       }
