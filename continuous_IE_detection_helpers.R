@@ -84,13 +84,14 @@ determine_p_var <- function(fill_var) {
 #'
 #'
 determine_threshold <- function(fill_var) {
-  p_var <- switch(fill_var, 'rc' = 0,
-                  'rc_CYT' = 0,
-                  'yr_fractional_change' = 0,
-                  'effective_editing_max' = 1,
-                  'depletion_max' = 1,
-                  'depletion_full' = 1,
-                  'depletion_mean' = 1)
+  p_var <- switch(fill_var, 
+    'rc' = 0,
+    'rc_CYT' = 0,
+    'yr_fractional_change' = 0,
+    'effective_editing_max' = 1,
+    'depletion_max' = 1,
+    'depletion_full' = 1,
+    'depletion_mean' = 1)
 }
 
 
@@ -372,9 +373,10 @@ fit_wilcox_model <- function(dtf) {
 fit_rlm_model <- function(dtf) {
   if (!test_data_sufficiency(dtf)) return(NULL)
 
-  unnormalized_mod <- fit_rlm_(dtf)
-  dtf$y_var <- dtf$y_var / unnormalized_mod$intercept
-  normalized_mod <- fit_rlm_(dtf)
+  unnormalized_mod <- fit_rlm_(dtf, simple_output = T)
+  if (is.null(unnormalized_mod)) return(NULL)
+  dtf$y_var <- dtf$y_var / coef(unnormalized_mod)[1]
+  normalized_mod <- fit_rlm_(dtf, simple_output = F)
   # orig_pars <- unnormalized_mod[c('intercept', 'rc')] %>%
   #   { setNames(., paste('orig_', names(.), sep = '')) }
   # stopifnot(maartenutils::eps(
@@ -385,13 +387,16 @@ fit_rlm_model <- function(dtf) {
 }
 
 
-fit_rlm_ <- function(dtf) {
+fit_rlm_ <- function(dtf, simple_output = F) {
   dtf <- setDT(dtf)[is.finite(y_var) & is.finite(ol)]
 
   lc <- tryCatch(suppressWarnings(
       MASS::rlm(y_var ~ ol, data = dtf,
                 x.ret = T, model = T, maxit = 1000)),
     error = function(e) { NULL })
+  if (simple_output) {
+    return(lc)
+  }
 
   quants <- c(.1, .25, .5, .75, .9)
   delta_names <- 
