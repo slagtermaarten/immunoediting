@@ -1,0 +1,36 @@
+# Immuno 
+
+# Results
+
+We tried it using Bayesian regression, but noticed quality control was
+tricky here, as it slightly biased towards sub-analyses consistent
+with depletion.
+
+# Figure captions
+
+## Figure 1 Binarized detection strategy, results, HLA allele
+presentation corroboration 
+
+## Figure 2 Continuous detection setup
+(schematic regressions), presentation score computation graphic,
+example regressions for TCGA data, negative control
+
+## Figure 3: graphical explanation of all subanalysis variations
+(plate-model or too complex), ME vs. ER, ME vs. ∆_𝑜
+
+## Figure 4: 
+## ANOVA/lmer
+regression estimates for factor analysis
+
+Percentile rank threshold
+STS included yes no
+Gene expression threshold
+Variant expression threshold
+Focus allele
+
+## Figure S1 
+A. Data flow
+
+
+
+

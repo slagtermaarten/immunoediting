@@ -1,0 +1,390 @@
+
+
+
+```{r, eval = F, warning=FALSE, echo=FALSE, fig.width = 3.382927, fig.height = 7}
+# .8 * b / (.8 * b + n)
+library(data.table)
+library(ggplot2)
+my_grid <- as.data.table(expand.grid(b = 1:20, y = 1:100))
+dYR <- function(b, y) {
+  y / (b + y)^2
+}
+my_grid[, 'z' := dYR(b, y)]
+
+p1 <- ggplot(my_grid, aes(x = b, y = y, fill = log10(z)))
+p1 <- ggplot(my_grid, aes(y = b, x = y, fill = z))
+p1 <- p1 + geom_tile(colour = "white")
+p1 <- p1 + scale_fill_gradient(name = "Derivative", low = "white", high = "steelblue")
+p1 <- p1 + scale_x_continuous(expand = c(0,0), name = "Non-peptide yielding mutations")
+p1 <- p1 + scale_y_continuous(expand = c(0,0), name = "Peptide yielding mutations")
+p1 <- p1 + ggtitle("Difference in yield rate upon loss of single binding mutation")
+
+print(p1)
+```
+Analyzing these differences in yield rate is only valid when the mutational load is at
+least one order of magnitude greater than the neo-epitope load, as otherwise the effect
+on the $YR$ should go unnoticed. For relatively small mutational loads (say <50), selective loss of a
+neo-antigen and its corresponding mutation will not result in a substantially smaller
+$YR$. Theoretically, the observed decrease in binding peptides should not exceed the
+precision of prediction pipeline that is used to identify neo-epitopes, as only true
+positive peptides can be lost in response to the adaptive immune system.
+
+where in yellowish combinations of peptide yielding and non-peptide yielding mutations a
+decrease in peptide yielding mutations is almost completely reflected in the observed
+yield rate, whereas in more reddish areas the decrease in peptide yielding mutations is
+completely obscured by the small amount of non-peptide yielding mutations to compare them
+with.
+
+```{r, eval = F}
+# where in yellowish combinations of peptide yielding and non-peptide yielding mutations
+# a decrease in peptide yielding mutations is almost completely reflected in the observed yield rate, whereas in more reddish areas the decrease in peptide yielding mutations is completely obscured by the small amount of non-peptide yielding mutations to compare them with.
+p1 <- ggplot(my_grid, aes(x = B, y = N, z = z, fill = z))
+p1 <- p1 + geom_tile(colour = "white")
+p1 <- p1 + scale_fill_gradient(name = "Percentage\nchange in YR", low = "yellow", high = "red",
+                               limits = c(-pval * 100, 0))
+p1 <- p1 + scale_x_continuous(expand = c(0,0), name = "Peptide yielding mutations", breaks = seq(1, 10))
+p1 <- p1 + scale_y_continuous(expand = c(0,0), name = "Non-peptide yielding mutations")
+p1 <- p1 + stat_contour(bins = 15, colour = 'black')
+p1 <- p1 + theme_bw(base_size = 16)
+p1 <- p1 + ggtitle(sprintf("Difference in yield rate upon\n%s percent decrease in binding mutations", 100 * pval))
+
+print(p1)
+```
+
+```{r, eval = F}
+p1 <- ggplot(my_grid, aes(x = pB, y = A, z = z, colour = z))
+p1 <- p1 + geom_point()
+p1 <- p1 + geom_tile(colour = "white")
+p1 <- p1 + scale_colour_gradient(name = "Total mutations\nbefore decrease", low = "yellow", high = "red")
+p1 <- p1 + stat_contour(bins = 15, colour = 'black')
+p1 <- p1 + scale_x_continuous(expand = c(0,0), name = "Percentage binders")
+p1 <- p1 + scale_y_continuous(expand = c(0,0), name = "Difference in observed yield rate")
+p1 <- p1 + stat_contour(bins = 15, colour = 'black')
+p1 <- p1 + theme_bw(base_size = 16)
+p1 <- p1 + ggtitle(sprintf("Difference in yield rate upon\n%s percent decrease in binding mutations", 100 * pval))
+print(p1)
+```
+
+```{r}
+my_grid[, 'pB' := B / (N + B)]
+my_grid[, 'A' := N + B]
+
+p1 <- ggplot(my_grid, aes(x = pB, y = z, colour = A))
+p1 <- p1 + geom_point()
+p1 <- p1 + geom_tile(colour = "white")
+p1 <- p1 + scale_colour_gradient(name = "Total mutations\nbefore decrease", low = "yellow", high = "red")
+p1 <- p1 + scale_x_continuous(expand = c(0,0), name = "Percentage binders")
+p1 <- p1 + scale_y_continuous(expand = c(0,0), name = "Difference in observed yield rate")
+p1 <- p1 + stat_contour(bins = 15, colour = 'black')
+p1 <- p1 + theme_bw(base_size = 16)
+p1 <- p1 + ggtitle(sprintf("Difference in yield rate upon\n%s percent decrease in binding mutations", 100 * pval))
+print(p1)
+```
+
+
+```{r, eval = F, warning=FALSE, echo=FALSE}
+#' Derivative of m_y / m_y + m_n with respect to m_y
+#' m_y neo yielding mutations
+#' m_n normal, non-yielding mutations
+#'
+d_m_y <- function(m_y, m_n = 100) {
+  m_n / (m_y^2 + 2 * m_y * m_n + m_n^2) - 1
+}
+curve(d_m_y, 1, 200, axes = F)
+```
+
+Using
+a linear model describing NeoAg load by mutational load and A:02:01 status, we observed
+that the former is a significant (i.e. highly correlated) covariate of predicted NeoAg
+load ($p < 2 * 10^{-16}$), whereas the latter does not further increase the model's
+ability to predict the neo-antigen load from non-synonymous mutation load ($p = .63$),
+giving some additional confidence that A:02:01 status does not influence $YR$.
+
+
+
+
+The amount of non-synonymous mutations and the percentage of indels in the mutanome are
+highly correlated with predicted neo-antigen load. Having the HLA*A:02:01 allele lowers
+the neo load by .6 according to this model. Various of the estimator should grow linearly
+with the amount of mutations if the formation of neo-antigens can truly be described by a
+stochastic process. This indeed seems to be the case here.
+
+```{r, warning=FALSE, echo=FALSE, results = 'asis'}
+## This sentence accompanies an analysis were no donors are conscientiously left out
+# Strangely enough, the glm fit indicates that having the A:02:01 allele increases the neo load in a mutational load dependent manner: the higher the amount of non-syn mutations, the smaller the amount of neos with the break even point at ~300 (1.38 / -.0054) mutations.
+invisible(devtools::load_all(file.path(rootFolder, 'libs', 'fasanalysis')))
+
+# donor_summary[, median(N_neos, na.rm = T)]
+
+pacman::p_load(xtable)
+
+fit <- glm(N_neos ~ N_nonsyn*hla_a0201_positive + frac.indels,
+           data = donor_summary[N_neos < 500], family = "poisson")
+exp(coef(fit))
+
+fit_g <- glm(N_neos ~ N_nonsyn*hla_a0201_positive + frac.indels,
+             data = donor_summary[N_neos < 500], family = "gaussian")
+exp(coef(fit_g))
+
+# fit_g <- update(fit, family = gaussian, data = donor_summary[N_neos < 500])
+print(xtable(summary(fit)), type = 'html')
+summary(fit)
+summary(fit_g)
+knitr::kable(anova(fit, test = 'LRT'))
+knitr::kable(anova(fit_g, test = 'LRT'))
+AIC(fit, fit_g)
+
+# fit <- glm(N_neos ~ N_nonsyn + N_nonsyn^2 + hla_a0201_positive, data = donor_summary)
+# fit <- glm(N_neos ~ N_nonsyn + power(N_nonsyn) + hla_a0201_positive, data = donor_summary)
+# fit <- glm(log10(N_neos + 1) ~ log10(N_nonsyn) + hla_a0201_positive, data = donor_summary)
+# fit <- glm(log10(N_neos + 1) ~ log10(N_nonsyn) + hla_a0201_positive, data = donor_summary,
+#            family = binomial)
+# fit <- glm(N_neos ~ N_nonsyn + hla_a0201_positive, data = donor_summary)
+# fit <- glm(log(N_neos) ~ log(N_nonsyn) + hla_a0201_positive, data = donor_summary)
+
+# fit <- glm(N_neos ~ N_nonsyn + frac.fs_indels + frac.stop_lost + frac.nfs_indels, data = donor_summary)
+# fit <- glm(N_neos ~ N_nonsyn + frac.indels:N_nonsyn, data = donor_summary)
+# fit <- glm(N_neos ~ i_muts.all_missense + frac.fs_indels + frac.nfs_indels, data = donor_summary)
+# fit <- glm(N_neos ~ i_muts.all_missense + i_muts.indels, data = donor_summary)
+```
+
+```{r, fig.height = 7}
+plot_residuals <- function(fo) {
+  layout(c(1, 2))
+  plot(fitted(fo), residuals(fo),
+    xlab = "fitted values", ylab = "Residuals", pch = 19)
+  abline(h=0, lty=2)
+  lines(smooth.spline(fitted(fo), residuals(fo)), col = 'purple', lwd = 2)
+
+  plot(fitted(fo) + residuals(fo), fitted(fo),
+    xlab = "Actual values", ylab = "Predicted values", pch = 19)
+  lines(fitted(fo), fitted(fo), col = 'red', lwd = 2)
+}
+
+plot_residuals(fit)
+plot_residuals(fit_g)
+```
+
+As the method presented above breaks down for smaller mutational loads and is fairly
+insensitive towards loss of only a few antigens, 
+
+
+
+     Firstly, for donors that are
+     A\*02:01 positive and for loss of true positive peptides is biologically possible .
+     Secondly, for donors that are A\*02:01 negative and for which no immune editing could
+     be present, these rates should be the cleanest. Thirdly, for donors for which no HLA
+     typing data is available - a mixed bag between A\*02:01 positive and negative donors.
+     Rooney et al. (2015) used matched HLA typing for their predictions and so did not
+     have to consider this.
+
+## Theoretical likelihood of spectrum with A at 5' and T at 3' to yield a non-synonymous mutation
+
+Methodology:
+  1. Identify weird spectrums
+  2. List all super-spectrums (spectrum plus surrounding basepairs) that meet these requirements
+  3. Compute fraction of super-spectrums that result in non-synonymous mutation for each
+  spectrum
+
+      ATT
+      AAT
+      AUU I
+      ATT
+
+The only problem with this approach is that it doesn't account for the genomic prevalence
+of each superspectrum. In an ideal scenario, the genomic prevalence of the superspectrum
+would be used to weight the observations in the fraction of step 3.
+
+Shown here are the non-syn
+over syn rates that we use to compute the expected amount of non-syn mutations given syn
+mutational load for three spectra that showed rates exceeding 1e3
+
+      AA>TT AG>TT AT>AT
+       1130  2515  2019
+
+
+# Todo
+
+* Consider neutral evolution
+* Non-syn to epitopes in a non mut context specific manner
+
+
+# Neutral evolution
+
+Idea: compute conversion rates on donors for which neutral tumor evolution seems plausible
+and that are HLA\*A:02:01 negative. Look for editing in donors for which neutral tumor
+evolution was a very bad fit.
+
+Re-annotating and expanding annotation with VAF data
+
+```{r, eval=F, warning=FALSE, echo=FALSE}
+# source(file.path(rootFolder, 'libs', 'fasanalysis', 'R', 'var_annotation.R'))
+# master_var_annotate('TCGA-AA-3712', partial_compute = 'VAF')
+# master_var_annotate('TCGA-05-4402', partial_compute = 'VAF')
+lapply(auto_name(pipeline_out_fns[, donor_id]),
+       master_var_annotate, partial_compute = 'VAF')
+```
+
+```{r, eval=F, warning=FALSE, echo=FALSE}
+source(file.path(rootFolder, 'libs', 'fasanalysis', 'R', 'sottoriva_neutral_evolution.R'))
+# devtools::load_all(analysis_code)
+# process_sottoriva_donor('TCGA−AA−3712')
+sottoriva_res <- lapply(auto_name(pipeline_out_fns[, donor_id]), process_sottoriva_donor)
+unlist(sottoriva_res) > .98 %>% { c(mean(.), sum(.)) }
+```
+
+# Using silent mutation on specific genomic loci
+
+
+Driver genes
+
+```{r, eval = F, include = T, output = 'asis', warning=FALSE, echo=FALSE}
+# Compute rates on A*02:01 pos donors to get rates as close to Rooney's as possible.
+# Compute rates on A*02:01 neg donors to compute rates where immune editing should not be
+# possible
+project_rates <- donor_summary[, {
+  lapply(tally_names[['driver_gene']], function(n) {
+    NS = na_minded_sum(sprintf("i_driverness_s.%s", n))
+    S = na_minded_sum(sprintf("i_driverness_n.%s", n))
+    E = na_minded_sum(sprintf("c_driverness_n.%s", n))
+    eps = na_minded_sum(c_driverness.gene_tier_0)
+  StNS = NS / S
+  NStE = eps / NS
+
+  .(N_donors = length(unique(donor_id)),
+    NS = NS,
+    S = S,
+    StNS = StNS,
+    NStE = NStE) }, by = c('project', 'hla_a0201_positive')]
+
+setkey(project_rates, project)
+knitr::kable(project_rates)
+```
+
+## Editing when considering clonal mutations exclusively
+
+Perhaps editing should only be visible at the clonal level
+
+```{r, rooneylistcomp, eval = F, warning=FALSE, echo=FALSE}
+source(file.path(rootFolder, 'libs', 'fasanalysis', 'R', 'rooney_editing.R'))
+rooney_list_clonal <- lapply(auto_name(pipeline_out_fns[, donor_id]),
+                             process_rooney_donor,
+                             clonal_focus = T)
+
+# saveRDS(rooney_list_clonal, file.path(rootFolder, 'data-raw', 'rooney2015',
+#                                       'rooney_list_w_stop_clonal.rds'))
+```
+
+```{r, warning=FALSE}
+rooney_list_clonal <- readRDS(file.path(rootFolder, 'data-raw', 'rooney2015',
+                                      'rooney_list_w_stop_clonal.rds'))
+
+rooney_cfs_clonal <- compute_cfs(rooney_list_clonal)
+
+missing_StNS <- with(rooney_cfs_clonal, {
+  unique_elems(names(StNS), names(NStE))
+})
+
+R_val_table <- copy(donor_summary[, .(donor_id, project, hla_a0201_positive)])
+R_val_table[, 'R' := sapply(donor_id, compute_R,
+                            lookup_list = rooney_list_clonal,
+                            cfs = rooney_cfs_clonal)]
+
+
+# mean(log10(R_val_table[, R]), na.rm = T)
+# mean(R_val_table[, R], na.rm = T)
+# median(R_val_table[, R], na.rm = T)
+hist(log10(R_val_table[, R]), na.rm = T, col = 'darkblue',
+     main = 'Distribution of R values for clonal mutations',
+     xlab = 'R')
+plot_rooney_editing(R_val_table, fill_val = 'hla_a0201_positive')
+```
+
+Computing the pan-cancer conversion factors, we do observe a slightly lower relationship
+between silent and non-silent mutations (StNS in the table below) in A*02:01 positive
+donors, consistent with selective loss of non-syn mutations. The conversion factors
+between epitopes and non-silent mutations are hardly different.
+
+
+
+### Robustness of conversion factors
+
+How robust are these estimates of the conversion factors? Using a bootstrapping analysis,
+in which a donors are randomly resampled with replacement, we estimate the variance of our
+point estimates. Shockingly, the point estimates of StNS CF lie remotely located from the
+bootstrap distribution of estimates.
+
+```{r, include = F}
+rm(list = ls())
+library(ggplot2)
+invisible(devtools::load_all(file.path(rootFolder, 'libs', 'fasanalysis')))
+
+donor_summary[, "StNS" := N_nonsyn / i_muts.silent_mutation]
+donor_summary[, "NStE" := N_neos / N_nonsyn]
+multiplot(hist_wrapper(donor_summary, xval = "StNS", scale_name = "StNS"),
+          hist_wrapper(donor_summary, xval = "NStE", scale_name = "NStE"))
+if (!require("DT")) install.packages('DT')
+vars.interest <- c("project", "donor_id", "N_neos", "N_nonsyn",
+                   "i_muts.silent_mutation", "i_muts.missense_mutation", "frac.indels",
+                   "StNS", "NStE")
+
+donor_summary[StNS > 20, vars.interest, with = F] %>% datatable
+donor_summary[NStE > .3, vars.interest, with = F] %>% datatable
+
+# prcomp(donor_summary[, vars.interest, with = F],  scale. = TRUE)
+```
+
+
+```{r, eval = T, include = F, bootstrap_CF, cache = F}
+# file.remove(file.path(rootFolder, 'maarten-analyses', 'saved-objects', 'pan_cf_bs.rds'))
+# file.remove(file.path(rootFolder, 'maarten-analyses', 'saved-objects', 'project_cf_bs.rds'))
+
+cacher(pan_cf_bs <- bootstrap_dt(f = mutcontext_ignore_rates,
+                          by_col = c('hla_a0201_positive'),
+                          N = 1000, PB = T))
+cacher(pan_cf_bs_all <- bootstrap_dt(f = mutcontext_ignore_rates,
+                          by_col = NULL,
+                          N = 1000, PB = T))
+cacher(project_cf_bs <- bootstrap_dt(f = mutcontext_ignore_rates,
+                              by_col = c('hla_a0201_positive', 'project'),
+                              N = 1000, PB = T))
+# file.remove(file.path(cacher_loc, 'project_cf_bs_all.rds'))
+cacher(project_cf_bs_all <- bootstrap_dt(f = mutcontext_ignore_rates,
+                              by_col = c('project'),
+                              N = 1000, PB = T))
+```
+
+```{r, warning=FALSE, echo=FALSE}
+pan_cf_bs_all[, hla_a0201_positive := 'all']
+project_cf_bs_all[, hla_a0201_positive := 'all']
+pan_cf_bs <- rbind(pan_cf_bs, pan_cf_bs_all)
+project_cf_bs <- rbind(project_cf_bs, project_cf_bs_all)
+```
+
+```{r, include = F, htmlcap = 'Bootstrap variance estimation of conversion factors. The samples for which no HLA typing is available seem to sizeably differ from which is'}
+pan_rates
+pan_cf_bs[, plot_conversion_factors(.SD,
+       xvals = c('log10(StNS)', 'NStE'),
+       scale_names = c('log10(CF) - Syn to non-syn', 'CF - Non-syn to epitopes'))]
+```
+
+```{r, htmlcap = 'Bootstrap variance estimation of conversion factors. The samples for which no HLA typing is available seem to sizeably differ from which is'}
+pan_cf_bs[, plot_conversion_factors(.SD,
+       xvals = c('StNS_med_2', 'NStE_med_2'),
+       scale_names = c("CF - Syn to non-syn", "CF - Non-syn to epitopes"))]
+```
+
+
+```{r, htmlcap = 'Project specific conversion factor distributions', fig.height = 16, fig.width = 8}
+project_cf_bs[, plot_conversion_factors(.SD,
+       xvals = c('StNS_med_2', 'NStE_med_2'),
+       scale_names = c("CF - Syn to non-syn", "CF - Non-syn to epitopes"))]
+```
+
+
+
+# Discussion
+ * Rooney et al. (2015) analyzed a (slightly) different set of donors but due to the
+   unbiased sampling of donors in TCGA/ICGC, we should not be getting qualitatively
+   different results.
+

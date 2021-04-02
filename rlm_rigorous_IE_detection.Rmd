@@ -1,0 +1,1513 @@
+---
+title: "Regressing out confounding factors in immunoediting analysis"
+author: "Maarten Slagter"
+output:
+    html_document:
+        toc: true
+        theme: journal
+---
+
+In this document we aggregate sub-analyses to estimate editing at the
+tumor-type level, correcting tumor types for sub-analysis composition.
+
+Load in an overview of all regressions, i.e. one for combination of a
+tumor type, pipeline setting and immunoediting analysis setting.
+Filter away analyses for which sampling did not converge as basic QC.
+
+Throughout this document, `yr_fractional_change` refers to the slope
+divided by the intercept (>0), which is interpretable as the mean
+fractional loss in neo-antigen yield rate (NAYR) between patients with
+PS = 0 and PS = 1.
+
+Negative (positive) yr_fractional_change -> editing/depletion
+(enrichment) of neo-antigens
+
+```{r, init, warning=FALSE}
+source('~/antigenic_space/bin/init.R')
+knitr::opts_chunk$set(cache = T, include = T)
+
+source(file.path('~/antigenic_space', 'maarten-analyses',
+    'immune_editing', 'continuous_IE_detection_init.R'))
+
+setting_dtf <-
+  compile_all_coef_overview(
+    redo = F,
+    redo_subanalyses = F,
+    ncores = 1,
+    # ncores = ncores,
+    reg_method = 'rlm',
+    include_non_ds_tallies = T,
+    z_normalize = F
+  ) %>%
+  annotate_pipeline_settings()
+
+f_setting_dtf <-
+  setting_dtf %>%
+  filter_coef_overview(
+    intercept_filter_p_val = .05,
+    # intercept_filter_magnitude = 1e-16,
+    intercept_filter_magnitude = 1e-3,
+    # intercept_filter_magnitude = NULL,
+    force_positive_intercept = F,
+    # rc_filter_magnitude = 1,
+    # rc_filter_magnitude = NULL,
+    # scale_filter = .5,
+    scale_filter = NULL,
+    AFDP_50_filter = .5,
+    # AFDP_75_filter = .8,
+    # AFDP_90_filter = .7,
+    min_patients = 20,
+    min_project_size = 250
+  )
+
+version <- NULL
+version <- 'MRE'
+version <- 'AFDP_75'
+version <- 'norm_scale'
+```
+
+# AFDP dist
+
+```{r, warning=FALSE}
+hist(f_setting_dtf$AFDP_, breaks = 100)
+```
+
+```{r, warning=FALSE}
+p <- ggplot(f_setting_dtf, aes(x = AFDP_50, y = norm_scale)) + 
+  geom_hex() +
+  geom_abline(intercept = 0, slope = 1, linetype = 2) +
+  scale_fill_viridis_c()
+
+print_plot(
+  p, fn = file.path(img_loc, glue('mean_scale_vs_AFDP_50.png')),
+  w = 17.4, h = 17)
+```
+
+# Diagnose problematic sub-analyses
+
+```{r, warning=FALSE}
+f_setting_dtf[tumor_type == 'melanoma' & fitted <= -.5]
+```
+
+Extreme slopes can be prevented by taking sub-analyses with a decent
+number of samples at the far ends of the PS spectrum.
+
+```{r, warning=FALSE}
+source(file.path('~/antigenic_space', 'maarten-analyses',
+    'immune_editing', 'continuous_IE_detection_init.R'))
+
+## This was fixed by only selecting analyses with at least 3 pts in
+## both the upper and lower quartile of PS
+f_setting_dtf[intercept < 0]
+pick <- f_setting_dtf[intercept < 0][1]
+rlm_plot_pick(pick, label_pos_y = 'top', label_pos_x = 'left')
+```
+
+```{r, eval=F, warning=FALSE}
+source(file.path('~/antigenic_space', 'maarten-analyses',
+    'immune_editing', 'continuous_IE_detection_init.R'))
+setting_dtf[grepl('rooney', analysis_name),
+  hist(intercept, breaks = 300, main = 'Rooney analyses')]
+setting_dtf[!grepl('rooney', analysis_name),
+  hist(intercept, breaks = 300, main = 'Non-rooney analyses')]
+
+pick <- setting_dtf[grepl('rooney', analysis_name)] %>%
+  .[maartenutils::eps(intercept, 0, 1e-15)] %>%
+  .[3]
+rlm_plot_pick(pick, label_pos_y = 'top', label_pos_x = 'left')
+```
+
+# Characterization of scale
+
+Which settings are associated with scale?
+
+```{r, eval = F, warning=FALSE}
+# f_setting_dtf$scale
+hist(f_setting_dtf$scale, breaks = 1000)
+hist(setting_dtf$norm_scale, xlim = c(0, 1), breaks = 1e6)
+hist(f_setting_dtf$norm_scale, breaks = 1000)
+```
+
+```{r, include = F, eval = F, warning=FALSE}
+library(lme4)
+
+fn <- file.path(rds_dir, 'scale_rlm_lmer_mod.rds')
+if (!file.exists(fn)) {
+  grp_vars <- c('focus_allele', 'VE_threshold',
+    'patient_inclusion_crit', 'expression_threshold', 'LOH_HLA',
+    'analysis_name', 'sts_filtering', 'percentile_rank',
+    'overlap_var')
+
+  c_formula <-
+    sprintf('norm_scale ~ %s + (%s | tumor_type)',
+      paste(grp_vars, collapse = ' + '),
+      paste(grp_vars, collapse = ' + ')) %>%
+    as.formula()
+
+  scale_mod <- lme4::lmer(
+    formula = c_formula,
+    data = f_setting_dtf, REML = T,
+    weights = NULL,
+    control = lmerControl(optCtrl = list(maxfun = 1000))
+  )
+  # saveRDS(scale_mod, fn)
+} else {
+  scale_mod <- readRDS(fn)
+}
+```
+
+```{r, warning=FALSE}
+source(file.path('~/antigenic_space', 'maarten-analyses',
+    'immune_editing', 'continuous_IE_detection_init.R'))
+
+N_patients <- 100
+N_patients <- 1000
+N_patients <- 30
+b0 = .9
+b1 = 0
+b1 = -.1
+e_sd = .33 * b0
+e_sd = .1 * b0
+N_reps = 100
+
+# cor(rep(1, N_patients)+rnorm(N_patients, sd = .01), 1:N_patients)
+
+res <- purrr::map_dfr(1:N_reps, function(x) {
+  dtf <- tibble(
+    ol = runif(N_patients, 0, 1),
+    y_var = b0 + ol * b1 + rnorm(N_patients, sd = e_sd),
+  ) 
+  fit <- fit_rlm_model(dtf)
+  fit[c('delta_CI_l', 'delta_mean', 'delta_CI_h')]
+}) %>% setDT
+
+expected_val <- 1+(b1/b0)
+
+res %>%
+  arrange(delta_mean) %>%
+  mutate(i = 1:n()) %>%
+  ggplot(aes(x = i, y = delta_mean, 
+      ymin = delta_CI_l, ymax = delta_CI_h)) + 
+  geom_point() +
+  geom_linerange() +
+  coord_flip() +
+  geom_hline(yintercept = expected_val) 
+
+res[, mean(delta_CI_h < expected_val | delta_CI_l > expected_val)]
+```
+
+# 'Raw' view of effect size
+
+Which tumor types are indicated to have undergone editing?
+
+```{r, evidence_ratio_fishtail, warning=FALSE}
+source(file.path('~/antigenic_space', 'maarten-analyses',
+    'immune_editing', 'continuous_IE_detection_init.R'))
+levels(f_setting_dtf$project_extended)
+
+B <- .5
+p1 <- var_vs_error(
+  dtf = f_setting_dtf,
+  x = version,
+  y = 'yr_fractional_change') +
+  scale_y_continuous(
+    name = delta_label, 
+    breaks = seq(-B, B, by = .2),
+    limits = c(-B, B)
+  ) + right_legend
+
+print_plot(
+  p1, fn = file.path(img_loc, 
+    glue('rlm_fishtail{make_flag(B)}{make_flag(version)}.png')),
+  w = 17.4, h = 17)
+```
+
+Is effect size related to intercept (i.e. are more stringent
+neo-antigen filterings more likely to point towards editing?)
+
+```{r, evidence_ratio_fishtail, warning=FALSE}
+source(file.path('~/antigenic_space', 'maarten-analyses',
+    'immune_editing', 'continuous_IE_detection_init.R'))
+
+B <- .1
+
+p1 <- var_vs_error(
+  dtf = f_setting_dtf[analysis_name != 'rooney_param_titration'],
+  x = 'intercept',
+  y = 'rc') +
+  xlab('intercept') +
+  scale_y_continuous(
+    name = 'rc', 
+    breaks = seq(-B, B, by = .2),
+    limits = c(-B, B)
+  ) + right_legend
+
+print_plot(
+  p1, fn = file.path(img_loc, 
+    glue('rlm_fishtail_rc_vs_intercept{make_flag(version)}.png')),
+  w = 17.4, h = 17)
+```
+
+Related: is intercept related to scale?
+
+There is definitely a positive association here for most tumor types.
+
+```{r, evidence_ratio_fishtail, warning=FALSE}
+source(file.path('~/antigenic_space', 'maarten-analyses',
+    'immune_editing', 'continuous_IE_detection_init.R'))
+
+p1 <- var_vs_error(
+  dtf = f_setting_dtf[analysis_name != 'rooney_param_titration'], 
+  x = version, y = 'intercept') +
+  xlab(version) +
+  scale_y_continuous(name = expression(y~' at '~italic(h)==0)) 
+
+if (version == 'norm_scale') {
+  p1 <- p1 + scale_x_reverse(name = version)
+}
+
+print_plot(
+  p1, 
+  fn = file.path(img_loc, 
+    glue('rlm_fishtail_intercept{make_flag(version)}.png')),
+  w = 17.4, h = 17)
+```
+
+# Example scatters
+
+```{r, warning=FALSE}
+source(file.path('~/antigenic_space', 'maarten-analyses',
+    'immune_editing', 'continuous_IE_detection_init.R'))
+
+plots <-
+  expand_grid(
+    mad = seq(0.2, 0.8, .1), delta = c(.2, 0, -.2)
+  ) %>%
+  purrr::pmap(function(mad, delta) {
+    pick <- NULL; error <- 1e-9
+    # mad = .4; delta = 0;
+    while (is.null(pick$percentile_rank) || nrow(pick) == 0) {
+      if (T) {
+        pick <- f_setting_dtf[
+          maartenutils::eps(yr_fractional_change, delta, error) &
+          # maartenutils::eps(norm_scale, mad, error)]
+          maartenutils::eps(AFDP_75, mad, error)]
+      } else {
+        pick <- f_setting_dtf[which.min(
+          (yr_fractional_change - delta)^2 + 
+            (norm_scale - mad)^2)]
+      }
+      error <- error * 10
+    }
+    pick <- pick[1]
+    rlm_plot_pick(pick, 
+      label_pos_y = 'top', 
+      label_pos_x = 'right')
+  })
+
+plot_panel_layout(plots,
+  filename = file.path(img_loc, 
+    'delta_scale_titration_scatters.pdf'),
+  labels = NULL, ncol = 3, nrow = 3)
+```
+
+```{r, warning=FALSE}
+source(file.path('~/antigenic_space', 'maarten-analyses',
+    'immune_editing', 'continuous_IE_detection_init.R'))
+
+pick <- f_setting_dtf[
+  maartenutils::eps(yr_fractional_change, -.3, .1) &
+  maartenutils::eps(norm_scale, .1, .01)] %>%
+  .[order(n_patients)] %>%
+  .[1]
+p4 <- rlm_plot_pick(pick, label_pos_y = 'top', 
+  label_pos_x = 'right')
+print(p4)
+```
+
+```{r, warning=FALSE}
+source(file.path('~/antigenic_space', 'maarten-analyses',
+    'immune_editing', 'continuous_IE_detection_init.R'))
+
+## 'Average' plot: average in both editing and explained variance
+pick <- f_setting_dtf[
+  maartenutils::eps(yr_fractional_change,
+    median(f_setting_dtf$yr_fractional_change), .01) &
+  maartenutils::eps(norm_scale, median(f_setting_dtf$norm_scale),
+    .001)][order(-n_patients)][1]
+
+p1 <- rlm_plot_pick(pick, label_pos_y = 'top', label_pos_x = 'left')
+# print(p1)
+
+## Unreliable editing
+pick <- setting_dtf[
+  # maartenutils::eps(yr_fractional_change, -.5, .01) &
+  maartenutils::eps(norm_scale, .5, .001)] %>%
+  .[order(n_patients)] %>%
+  .[2]
+p2 <- rlm_plot_pick(pick, label_pos_y = 'top', label_pos_x = 'right')
+# print(p2)
+
+pick <- f_setting_dtf[
+  maartenutils::eps(yr_fractional_change, -.3, .04) &
+  maartenutils::eps(norm_scale, .1, .1)] %>%
+  .[order(n_patients)] %>%
+  .[5]
+p3 <- rlm_plot_pick(pick, label_pos_y = 'top', label_pos_x = 'right')
+
+pick <- f_setting_dtf[
+  maartenutils::eps(yr_fractional_change, .1, .1) &
+  maartenutils::eps(norm_scale, .1, .01)] %>%
+  .[order(n_patients)] %>%
+  .[1]
+p4 <- rlm_plot_pick(pick, label_pos_y = 'top', label_pos_x = 'right')
+# print(p4)
+```
+
+```{r, warning=FALSE}
+## 'Average' plot: average in both editing and explained variance
+pick <- f_setting_dtf[
+  maartenutils::eps(norm_scale, .5,
+    .001)][order(-n_patients)][1]
+p1 <- rlm_plot_pick(pick, label_pos_y = 'top', label_pos_x = 'right')
+
+source(file.path('~/antigenic_space', 'maarten-analyses',
+    'immune_editing', 'continuous_IE_detection_init.R'))
+pick <- f_setting_dtf[
+  maartenutils::eps(norm_scale, .4,
+    .001)][order(-n_patients)][1]
+p2 <- rlm_plot_pick(pick, label_pos_y = 'top', label_pos_x = 'right')
+# print(p2)
+
+pick <- f_setting_dtf[
+  maartenutils::eps(norm_scale, .3,
+    .001)][order(-n_patients)][1]
+p3 <- rlm_plot_pick(pick, label_pos_y = 'top', label_pos_x = 'right')
+# print(p3)
+
+pick <- f_setting_dtf[
+  maartenutils::eps(norm_scale, .2,
+    .001)][order(-n_patients)][1]
+p4 <- rlm_plot_pick(pick, label_pos_y = 'top', label_pos_x = 'right')
+# print(p4)
+
+library(patchwork)
+print_plot((p1 + p2) / (p3 + p4),
+  fn = file.path(img_loc, 'rlm_example_scatters.png'),
+  w = 17.4, h = 15)
+```
+
+
+# Averaging NAYR loss within tumor types
+
+Weight depletion estimates by their estimation error.  The here
+reported credibility intervals are averages of the credibility
+intervals of subanalyses, which is what we should want here. In
+contrast, a CI over the aggregate of all sub-analyses, as lm() would
+give, would give overly narrow bounds as the aggregated sub-analyses
+are far from independent from each other. The downside of the 'clean'
+estimates in this section is that they are not corrected for variation
+is subanalysis composition between tumor types, which is substantial
+(see below).
+
+```{r, average_estimates, warning=FALSE}
+source(file.path('~/antigenic_space', 'maarten-analyses',
+    'immune_editing', 'continuous_IE_detection_init.R'))
+t_dat <- summarize_by_project(f_setting_dtf)
+if (test_rendering()) {
+  DT::datatable(dplyr::select(t_dat, -project_extended))
+}
+```
+
+```{r, fisher_plot_lenient, dependson='average_estimates', warning=FALSE}
+source(file.path('~/antigenic_space', 'maarten-analyses',
+    'immune_editing', 'continuous_IE_detection_init.R'))
+print_plot(
+  forest_plot(t_dat) +
+    ylab(expression(Delta~'  weighted by residuals')),
+  fn = file.path(img_loc, 'dumb_forest.png'),
+  w = 8.7, h = 10)
+```
+
+# Factor analysis of sub-analysis composition
+
+Which tumor types are significantly immunoedited? We attempted to
+correct for potential subanalysis composition between tumor types by
+fitting a linear fixed effects model to the aggregate of all Bayesian
+regressions, in which all immunoediting settings and neo-antigen
+prediction pipeline settings were included as explanatory covariates,
+in order to estimate the individual effects of all said settings, and
+their interactions, on the resulting estimate of NAYR loss. Using this
+analysis, differences between tumor types can be normalized out.
+
+First plot residual effects to see what variables could benefit from a
+random effect
+
+```{r, warning=FALSE}
+grp_vars <- c('focus_allele', 'VE_threshold',
+  'patient_inclusion_crit', 'expression_threshold', 'LOH_HLA',
+  'analysis_name', 'sts_filtering', 'percentile_rank',
+  'overlap_var')
+
+for (varn in grp_vars) {
+  print_plot(
+    ggplot(f_setting_dtf,
+      mapping = aes_string(x = varn, y = 'yr_fractional_change')) +
+      geom_boxplot() +
+      facet_wrap(~tumor_type, nrow = 3),
+    w = 20, h = 20,
+    fn = file.path(img_loc,
+      glue('{varn}_marginal_across_tumors.png'))
+  )
+}
+```
+
+```{r, include = F, eval = T, warning=FALSE}
+fn <- file.path(rds_dir, 'rlm_lmer_mod.rds')
+if (F || !file.exists(fn)) {
+  source(file.path('~/antigenic_space', 'maarten-analyses',
+      'immune_editing', 'continuous_IE_detection_init.R'))
+  me_mod <- fit_meta_lm(f_setting_dtf, method = 'rem',
+    FE_vars = c('tumor_type', 'VE_threshold',
+      'patient_inclusion_crit', 'expression_threshold', 'LOH_HLA',
+      'analysis_name', 'percentile_rank'),
+    RE_vars = c('patient_inclusion_crit', 'focus_allele'))
+  # saveRDS(me_mod, fn)
+} else {
+  me_mod <- readRDS(fn)
+}
+# vcov(me_mod)
+
+f_setting_dtf$fitted <- fitted(me_mod)
+f_setting_dtf$pearson_residuals <- resid(me_mod, type = 'pearson')
+f_setting_dtf$residuals <- resid(me_mod)
+sum(abs(f_setting_dtf$residuals)) / nrow(f_setting_dtf)
+```
+
+```{r, warning=FALSE}
+x <- ranef(me_mod, condVar = T)
+attributes(x)
+pv   <- attr(x, "class")
+cols <- 1:(dim(pv)[1])
+se   <- unlist(lapply(cols, function(i) sqrt(pv[i, i, ])))
+ord  <- unlist(lapply(x, order)) + rep((0:(ncol(x) - 1)) * nrow(x), each=nrow(x))
+pDf  <- data.frame(
+  y=unlist(x)[ord],
+  ci=1.96*se[ord],
+  nQQ=rep(qnorm(ppoints(nrow(x))), ncol(x)),
+  ID=factor(rep(rownames(x), ncol(x))[ord], levels=rownames(x)[ord]),
+  ind=gl(ncol(x), nrow(x), labels=names(x))
+)
+```
+
+Assess model error
+
+```{r, warning=FALSE}
+## Weird melanoma cluster patient_inclusion FDR1 is more powerfully
+## pushing downwards in melanoma than in other tumor types
+# f_setting_dtf[pearson_residuals > 1 & fitted <= -.5]
+
+png(file.path(img_loc, 'rlm_lme_residuals3.png'), res = 400,
+  units = 'cm', width = 20, height = 25)
+
+nf <- layout(matrix(c(1, 1:11), ncol = 2, nrow = 6, byrow = T),
+    heights = c(2, rep(1, 5)))
+# layout.show(nf)
+
+plot(fitted(me_mod), resid(me_mod),
+  col = f_setting_dtf$tumor_type,
+  main = 'Main error', ylab = 'Residuals')
+abline(0,0, col="red")
+# hist(resid(me_mod), breaks = 1000)
+
+for (cn in colnames(ranef(me_mod)[[1]])) {
+  par(mar = c(2,2,2,2))
+  v <- ranef(me_mod)[[1]][, cn] %>%
+    setNames(rownames(ranef(me_mod)[[1]]))
+  v <- v[order(v)]
+  # v <- "patient_inclusion_critFDR1"
+  qqnorm(v, main = cn)
+  # qqnorm(v)
+  qqline(v, col = "red")
+}
+
+dev.off()
+```
+
+```{r, eval = F, warning=FALSE}
+library(lmerTest)
+t_dat <- f_setting_dtf
+ranova(me_mod)
+```
+
+Tumor type predictions. Start with most lenient filtering and
+gradually increase analysis stringency, strengthening the result
+
+```{r, warning=FALSE}
+source(file.path('~/antigenic_space', 'maarten-analyses',
+    'immune_editing', 'continuous_IE_detection_init.R'))
+
+grp_vars <- c('focus_allele', 'VE_threshold',
+  'patient_inclusion_crit', 'expression_threshold', 'LOH_HLA',
+  'analysis_name', 'sts_filtering', 'percentile_rank',
+  'overlap_var', 'tumor_type')
+
+if (T) {
+  pick <- f_setting_dtf[, grp_vars, with = F] %>%
+    map(~change_factor_value(.x, levels(.x)[1])) %>%
+    as.data.table %>%
+    dplyr::mutate(tumor_type = NULL) %>%
+    cbind(tumor_type =
+      change_factor_value(f_setting_dtf$tumor_type,
+        levels(f_setting_dtf$tumor_type)))
+} else {
+  pick <- f_setting_dtf[1]
+  lapply(f_setting_dtf[, grp_vars, with = F], levels)
+  pick$tumor_type <- 'melanoma'
+  pick$tumor_type <- 'liver'
+  pick <- pick[, grp_vars, with = F]
+}
+
+model_name = 'mod3'
+PIC = 'FDR10'
+LOHHLA = 'strict_LOHHLA'
+id <- glue('{make_flag(model_name)}\\
+  {make_flag(LOHHLA)}{make_flag(PIC)}')
+fn <- file.path(rds_dir, glue('effect_size_storytelling{id}.rds'))
+redo <- T
+redo <- F
+# file.remove(fn)
+if (redo || !file.exists(fn)) {
+  before <- pick %>%
+    run_lmer_preds(me_mod = me_mod, version = 'Lenient')
+
+  pick$percentile_rank %<>% change_factor_value('1')
+  pick$LOH_HLA %<>% change_factor_value(LOHHLA)
+  stageI <- pick %>%
+    run_lmer_preds(me_mod = me_mod,
+      version = 'Strict affinity filter & HLA LOH')
+
+  pick$VE_threshold %<>% change_factor_value('1')
+  stageII <- pick %>%
+    run_lmer_preds(me_mod = me_mod, version = 'Variant expression')
+
+  pick$patient_inclusion_crit %<>% change_factor_value(PIC)
+  stageIII <- pick %>%
+    run_lmer_preds(me_mod = me_mod, version = 'IT treatment resistance')
+
+  # pick$focus_allele %<>% change_factor_value('A1101')
+  # stageIV <- pick %>%
+  #   run_lmer_preds(me_mod = me_mod, version = 'Opportunistic focus allele')
+  # pick$analysis_name %<>% change_factor_value('rooney_param_titration')
+
+  t_dat <- rbind(before, stageI, stageII, stageIII) %>%
+    dplyr::mutate(project_extended =
+      rep(tumor_types_inv[as.character(pick$tumor_type)], 4)) %>%
+    dplyr::mutate(project_extended = factor(project_extended,
+        levels = unique(project_extended)[order(stageIII$mean)])) %>%
+    dplyr::mutate(version = factor(version, levels = unique(version)))
+  class(t_dat) <- c('setting_titration', class(t_dat))
+  saveRDS(t_dat, fn)
+} else {
+  t_dat <- readRDS(fn)
+}
+
+print_plot(
+  forest_plot(t_dat),
+  fn = file.path(img_loc,
+    glue('tumor_type_lmer_version_titration{make_flag(id)}.png')),
+  w = 17.4, h = 20)
+```
+
+```{r, warning=FALSE}
+f_setting_dtf[tumor_type == 'stomach_ebv_plus']
+f_setting_dtf[tumor_type == 'stomach_ebv_plus', .N, VE_threshold]
+f_setting_dtf[tumor_type == 'glioblastoma', .N, VE_threshold]
+f_setting_dtf[tumor_type == 'melanoma', .N, VE_threshold]
+f_setting_dtf[tumor_type == 'melanoma', .N, patient_inclusion_crit]
+f_setting_dtf[tumor_type == 'rectum', .N, patient_inclusion_crit]
+coef(me_mod)
+f_setting_dtf[, .N, VE_threshold]
+me_mod
+```
+
+Example scatters
+
+```{r, warning=FALSE}
+source(file.path('~/antigenic_space', 'maarten-analyses',
+    'immune_editing', 'continuous_IE_detection_init.R'))
+
+pick <- f_setting_dtf[
+  maartenutils::eps(yr_fractional_change, -.7, .1)] %>%
+  .[order(-norm_scale)]
+p1 <- rlm_plot_pick(pick, label_pos_y = 'top', label_pos_x = 'right')
+print(p5)
+```
+
+
+
+
+Regression coefficients for all other sub-analysis 'settings'
+
+```{r, warning=FALSE}
+source(file.path('~/antigenic_space', 'maarten-analyses',
+    'immune_editing', 'continuous_IE_detection_init.R'))
+
+formatted_coefs <-
+  broom.mixed::tidy(me_mod, effects = c('fixed'), conf.int = T) %>%
+  format_coefs() %>%
+  { . }
+
+vars <- c('focus_allele', 'expression_threshold', 'VE_threshold',
+  'percentile_rank', 'overlap_var', 'patient_inclusion_crit',
+  'LOH_HLA', 'analysis_name')
+
+unique(formatted_coefs$coef_type)
+
+p1 <- formatted_coefs %>%
+  dplyr::filter(coef_type %in%
+    c('Bulk expression', 'Variant level expression')) %>%
+  forest_plot(x_var = 'coef') +
+  scale_x_discrete(
+    name = 'Threshold\n(TPM or variant reads per 1e5 reads)') +
+  ylab(expression('Additive contribution to  '~Delta)) +
+  # top_left_legend
+  right_legend
+
+p2 <- formatted_coefs %>%
+  dplyr::filter(coef_type %in%
+    c('Exclusion of IT resistant patients', 'LOH of HLA')) %>%
+  forest_plot(x_var = 'coef') +
+  scale_x_discrete(name = '') +
+  ylab(expression('Additive contribution to  '~Delta)) +
+  # top_left_legend
+  right_legend
+
+p3 <- formatted_coefs %>%
+  dplyr::filter(
+    coef_type %in% c('Focus HLA allele', 'STS filtering',
+      'Response variable', 'PS computation')) %>%
+  forest_plot(x_var = 'coef') +
+  scale_x_discrete(name = '') +
+  ylab(expression('Additive contribution to  '~Delta)) +
+  right_legend
+
+library(patchwork)
+print_plot(p2 / p1 / p3, w = 17.4, h = 13,
+  fn = file.path(img_loc, 'rlm_rem_parameter_estimates.png'))
+```
+
+# The necessity to correct for subanalysis composition
+
+Especially the TR and LOHHLA covariates, shown important to final
+results above, are shown to be unevenly present across tumor types.
+
+```{r, analysis_composition, warning=FALSE}
+plot_analysis_composition <-
+  function(coef_name = 'expression_threshold') {
+  setting_dtf[log2_est_error <= -2, .N,
+    keyby = c('project_extended', coef_name)] %>%
+    .[, 'frac' := N / sum(N), by = project_extended] %>%
+    ggplot(
+      aes_string(
+        x = 'project_extended',
+        y = 'frac', fill = coef_name
+      )) +
+    geom_col() +
+    scale_x_discrete(name = '') +
+    rotate_x_labels(90) +
+    coord_flip() +
+    theme_fas()
+}
+
+for (v in vars) {
+  print(plot_analysis_composition(v))
+}
+```
+
+# HLA downsampling to test stability of current estimates
+
+With less HLA alleles, would we have gotten the same estimates?
+
+```{r, warning=FALSE}
+source(file.path('~/antigenic_space', 'maarten-analyses',
+    'immune_editing', 'continuous_IE_detection_init.R'))
+
+all_alleles <- unique(f_setting_dtf$focus_allele)
+N_alleles <- length(all_alleles)
+
+all_combinations <- map_dfr(1:N_alleles, function(t) {
+  all_combs <- gtools::combinations(n = N_alleles, r = t,
+    repeats.allowed = F) %>%
+    { all_alleles[.] } %>%
+    matrix(ncol = t, byrow = F) %>%
+    { . }
+
+  ## Split into list of tuples (list of lists actually)
+  all_combs <- split(
+    t(all_combs), rep(seq(1, length(all_combs), by = t), each = t))
+
+  imap_dfr(all_combs, function(comb, i) {
+    dtf_s <- f_setting_dtf[focus_allele %in% comb]
+    lm_mod <- fit_meta_lm(dtf = dtf_s)
+    t_dat <- extract_tumor_type_estimates(lm_mod) %>%
+      .[order(estimate_corr)]
+  }, .id = 'i')
+}, .id = 't')
+
+setDT(all_combinations)
+all_combinations[, 'id' := paste(t, i, sep = '-')]
+id_levs <- all_combinations[, naturalsort::naturalsort(unique(id))]
+all_combinations[, id := factor(id, levels = id_levs)]
+all_combinations[, i := NULL]
+```
+
+```{r, downsampling_forest, fig.width = 25/2.54, fig.height = 25/2.54, warning=FALSE}
+p <- ggplot(all_combinations,
+  aes(x = id, y = V2, ymin = V1, ymax = V3, colour = t)) +
+  geom_hline(yintercept = 0, color = 'grey20') +
+  geom_point() +
+  geom_linerange() +
+  ylab('log2 diff NAYR between PS = 0 and PS = 1') +
+  scale_x_discrete(name = 'HLA allele combination') +
+  scale_colour_discrete(name = '# of alleles included') +
+  theme_fas() +
+  facet_wrap(~project_extended, labeller = label_parsed)
+
+print_plot(p, fn = 'rlm_HLA_downsampling.png', w = 25, h = 25)
+```
+
+# Patient downsampling analysis
+
+Does patient number affect our estimates?
+
+```{r, init, warning=FALSE}
+source(file.path('~/antigenic_space', 'maarten-analyses',
+    'immune_editing', 'continuous_IE_detection_init.R'))
+
+redo <- F
+redo <- T
+
+library(furrr)
+plan(multicore, workers = 16)
+pred_settings = 'aggresive'
+
+if (pred_settings == 'aggresive') {
+  pick <- f_setting_dtf[, grp_vars, with = F] %>%
+    map(~change_factor_value(.x, levels(.x)[1])) %>%
+    as.data.table %>%
+    dplyr::mutate(tumor_type = NULL) %>%
+    cbind(tumor_type =
+      change_factor_value(f_setting_dtf$tumor_type,
+        levels(f_setting_dtf$tumor_type)))
+  pick$percentile_rank %<>% change_factor_value('1')
+  pick$LOH_HLA %<>% change_factor_value('strict_LOHHLA')
+  pick$VE_threshold %<>% change_factor_value('5')
+  pick$patient_inclusion_crit %<>% change_factor_value('FDR10')
+} else if (pred_settings == 'conservative') {
+  pick <- f_setting_dtf[, grp_vars, with = F] %>%
+    map(~change_factor_value(.x, levels(.x)[1])) %>%
+    as.data.table %>%
+    dplyr::mutate(tumor_type = NULL) %>%
+    cbind(tumor_type =
+      change_factor_value(f_setting_dtf$tumor_type,
+        levels(f_setting_dtf$tumor_type)))
+}
+
+fn <- file.path(rds_dir,
+  glue('rlm_patient_downsampling{make_flag(pred_settings)}.rds'))
+if (redo || !file.exists(fn)) {
+  coef_ov <-
+    expand_grid(ds_frac = c(.25, .5, .75, 1), iter = 1:3) %>%
+    # expand_grid(ds_frac = c(.25), iter = 1) %>%
+    # purrr::pmap_dfr(function(ds_frac, iter) {
+    furrr::future_pmap_dfr(function(ds_frac, iter) {
+      setting_dtf <-
+        compile_all_coef_overview(
+          redo = F,
+          redo_subanalyses = redo,
+          ds_frac = ds_frac,
+          iter = iter,
+          # ncores = 1,
+          ncores = ncores,
+          reg_method = 'rlm',
+          include_non_ds_tallies = T,
+          z_normalize = F
+        ) %>%
+        filter_coef_overview(
+          print_messages = F,
+          intercept_filter_magnitude = 1e-3,
+          ## Deviation from 'global/main' filter_coef_overview call
+          force_positive_intercept = T,
+          adaptive_scale_filter = F,
+          scale_filter = .5,
+          min_project_size = 250
+        ) %>%
+        annotate_pipeline_settings()
+      lm_mod <- fit_meta_lm(setting_dtf, method = 'rem')
+      # params <- broom.mixed::tidy(lm_mod,
+      #   effects = c('fixed'), conf.int = T)
+      t_dat <- run_lmer_preds(pick = pick, me_mod = lm_mod)
+      # t_dat <- cbind(t_dat, params)
+      t_dat$ds_frac <- ds_frac
+      t_dat$iter <- iter
+      return(t_dat)
+    })
+  saveRDS(coef_ov, fn)
+} else {
+  coef_ov <- readRDS(fn)
+}
+```
+
+```{r, warning=FALSE}
+p <- coef_ov %>%
+  dplyr::filter(abs(std_error) < abs(estimate)) %>%
+  dplyr::filter(abs(std_error_corr) < abs(estimate_corr)) %>%
+  ggplot(aes(x = as.factor(ds_frac),
+    y = estimate_corr,
+    ymin = estimate_corr - 1.96 * std_error_corr,
+    ymax = estimate_corr + 1.96 * std_error_corr,
+    colour = as.factor(iter))) +
+  geom_hline(yintercept = 0, color = 'grey20') +
+  geom_point() +
+  geom_linerange() +
+  # scale_y_continuous(limits = c(-1, 1)) +
+  ylab(expression(hat(Delta)[o])) +
+  facet_wrap(~term, labeller = label_parsed) +
+  theme(legend.position = 'right')
+
+print_plot(p, fn = 'rlm_patient_downsampling.png', w = 25, h = 25)
+```
+
+## Another validation of TR/LOHHLA as increasing NAYR
+
+Add these variables directly into the regression
+
+```{r, warning=FALSE}
+source(file.path('~/antigenic_space', 'maarten-analyses',
+    'immune_editing', 'continuous_IE_detection_init.R'))
+
+  pick <- f_setting_dtf[
+    maartenutils::eps(yr_fractional_change, -.3, .1) &
+    maartenutils::eps(norm_scale, .2, .02)][order(-n_patients)][1]
+  args <- pan_IE_res_to_call_args(pick)
+  args_a <- modifyList(args, list('LOH_HLA' = 'strict_LOHHLA'))
+
+  # call_func(test_continuous_IE, args)
+
+  prep <- call_func(prep_cont_IE_analyses, args)
+  prep_a <- call_func(prep_cont_IE_analyses, args_a)
+
+fit_rlm_model(prep$dtf)
+# fit_rlm_model(prep_a$dtf)
+
+# rlm_plot_pick(pick, label_pos_y = 'top', label_pos_x = 'left')
+```
+
+## Stepwise building of ME model
+
+```{r, include = F, eval = F, warning=FALSE}
+library(lme4)
+library(lmerTest)
+
+  t_dat <- f_setting_dtf[sample(seq(1, .N), 100)]
+  t_dat <- f_setting_dtf
+  formula <- yr_fractional_change ~ 1 + VE_threshold +
+    (1 + VE_threshold | tumor_type)
+  formula <- yr_fractional_change ~ 1 + VE_threshold +
+    expression_threshold +
+    (1 + VE_threshold + expression_threshold | tumor_type)
+  timing <- system.time(m1 <- lme4::lmer(
+    formula = formula,
+    data = t_dat,
+    REML = T,
+    weights = 1 / (t_dat$norm_scale + 1e-4)
+  ))
+  print(timing)
+  summary(m1)
+  ranova(m1)
+
+  coef_dtf <- suppressWarnings(broom::tidy(m1,
+      conf.method = 'profile',
+      # conf.method = 'boot',
+      # effects = c('fixed', 'ran_coefs'),
+      conf.int = T))
+  print(coef_dtf, n = 1000)
+
+  m2 <- lme4::lmer(
+    formula = yr_fractional_change ~ 1 + VE_threshold +
+      patient_inclusion_crit +
+      (1 + VE_threshold + patient_inclusion_crit | tumor_type),
+    data = f_setting_dtf, REML = T,
+    weights = 1 / (f_setting_dtf$norm_scale + 1e-4)
+  )
+  summary(m2)
+  ranova(m2)
+  fixef(m2)
+  ranef(m2)
+  # print(tidy(m2,
+  #     conf.method = 'profile',
+  #     effects = c('fixed', 'ran_coefs'),
+  #     conf.int = T), n = 5)
+
+  m3 <- lme4::lmer(
+    formula = yr_fractional_change ~ 1 + VE_threshold +
+      patient_inclusion_crit + tumor_type +
+      (1 + VE_threshold + patient_inclusion_crit | tumor_type),
+    data = f_setting_dtf, REML = T,
+    weights = 1 / (f_setting_dtf$norm_scale + 1e-4)
+  )
+  summary(m3)
+  ranova(m3)
+  # fixef(m3)
+  # ranef(m3)
+
+  m4 <- lme4::lmer(
+    formula = yr_fractional_change ~ 1 + VE_threshold +
+      patient_inclusion_crit + tumor_type + LOH_HLA +
+      (1 + VE_threshold + patient_inclusion_crit + LOH_HLA |
+        tumor_type),
+    data = f_setting_dtf, REML = T,
+    weights = 1 / (f_setting_dtf$norm_scale + 1e-4)
+  )
+  summary(m4)
+  ranova(m4)
+  # fixef(m4)
+  # ranef(m4)
+  # print(tidy(m4,
+  #     conf.method = 'profile',
+  #     effects = c('fixed', 'ran_coefs'),
+  #     conf.int = T), n = 5)
+
+  complete <-
+    yr_fractional_change ~ focus_allele + VE_threshold + patient_inclusion_crit +
+    expression_threshold + LOH_HLA + analysis_name + sts_filtering +
+    percentile_rank + overlap_var + (focus_allele + VE_threshold +
+    patient_inclusion_crit + expression_threshold + LOH_HLA +
+    analysis_name + sts_filtering + percentile_rank + overlap_var |
+    tumor_type)
+
+
+REs <- brms::ranef(me_mod)
+FEs <- brms::fixef(me_mod)
+library(broom.mixed)
+pacman::p_load(broom.mixed)
+```
+
+## Editing preferentially in tumor types in which NAYR doesn't correlate with immune cell infiltration?
+
+```{r, depletion_immune_correlation, eval = F, warning=FALSE}
+cor_dtf <- readRDS(file.path(rds_dir, 'xcell_neo_immune_correlations.rds'))
+cor_dtf[, tumor_type := tumor_types[project_extended]]
+i_dat <- merge(t_dat, cor_dtf)
+i_dat[, cor(V2, cor)]
+qplot(data = i_dat, x = V2, y = `cor`)
+```
+
+```{r, eval = F, warning=FALSE}
+xcell_estimates <- readRDS(file.path(rds_dir, 'xcell_estimates.rds'))
+xcell_estimates[1:5, 1:5]
+```
+
+# Isolated tumors analysis
+
+```{r, warning=FALSE}
+source(file.path('~/antigenic_space', 'maarten-analyses',
+    'immune_editing', 'continuous_IE_detection_init.R'))
+
+if (T) {
+  t_dat <- f_setting_dtf
+} else {
+  t_dat <- copy(f_setting_dtf[order(norm_scale), .SD[1],
+    by = analysis_grp_vars])
+}
+
+method <- 'interaction_lm'
+method <- 'brem'
+method <- 'lm'
+# tt = 'melanoma'
+version <- 'AFDP_75'
+
+plots <- map(levels(f_setting_dtf$tumor_type), function(tt) {
+  t_dat <- t_dat[tumor_type == tt]
+  if (method == 'brem') {
+    tumor_type <- tt
+    fn <- file.path(rds_dir,
+      glue('meta_analysis{make_flag(tumor_type)}\\
+        {make_flag(method)}.rds'))
+    if (IE_requires_computation(fn)) {
+      mod <- fit_meta_lm(t_dat, 
+        FE_vars = c('VE_threshold', 'patient_inclusion_crit', 
+          'expression_threshold', 'LOH_HLA', 'analysis_name',
+          'sts_filtering', 'percentile_rank', 'overlap_var'),
+        RE_vars = c('VE_threshold', 'patient_inclusion_crit', 
+          'expression_threshold', 'LOH_HLA', 'percentile_rank'),
+        grp_var = 'focus_allele', 
+        method = 'brem')
+      saveRDS(mod, fn)
+    } else {
+      mod <- readRDS(fn)
+      browser()
+    }
+  } else {
+    mod <- fit_meta_lm(t_dat, method = method)
+  }
+
+  if (class(mod) == 'brmsfit') {
+    coefs <- 
+      fixef(mod) %>%
+      as.data.frame %>%
+      rownames_to_column('term')
+    allele_intercepts <- 
+      ranef(mod)$focus_allele[, , 'Intercept'] %>% 
+      as.data.frame %>%
+      rownames_to_column('term') %>%
+      dplyr::mutate(term = paste0('focus_allele', term))
+    formatted_coefs <- rbind(coefs, allele_intercepts) %>%
+      format_coefs()
+    p_title <- parse(text = glue('{tumor_types_inv[tt]}'))
+  } else {
+    formatted_coefs <-
+      broom.mixed::tidy(mod, conf.int = T) %>%
+      format_coefs() %>%
+      { . }
+    p_title <- parse(text = glue('{tumor_types_inv[tt]}~',
+        '"- adj. "*italic(R)^2=={\\
+        signif(summary(mod)$adj.r.squared, 3)}'))
+  }
+
+  p1 <- formatted_coefs %>%
+    forest_plot(x_var = 'label', bg_var = 'coef_type') +
+    scale_x_discrete(name = '') +
+    ylab(expression('Additive contribution to  '~Delta)) +
+    no_legend +
+    ggtitle(p_title)
+  return(p1)
+})
+
+plot_panel_layout(plots,
+  filename = file.path(img_loc, 
+    glue('tumor_specific_lm{make_flag(method)}\\
+      {make_flag(version)}.pdf')),
+  labels = NULL, ncol = 1, nrow = 2)
+```
+
+Combined panel
+
+```{r, warning=FALSE}
+source(file.path('~/antigenic_space', 'maarten-analyses',
+    'immune_editing', 'continuous_IE_detection_init.R'))
+
+t_dat <- map_dfr(levels(f_setting_dtf$tumor_type), function(tt) {
+  # tt = 'melanoma'
+  t_dat <- f_setting_dtf[tumor_type == tt]
+
+  mod <- fit_meta_lm(t_dat, method = 'lm')
+
+  formatted_coefs <-
+    broom.mixed::tidy(mod, conf.int = T) %>%
+    format_coefs() %>%
+    dplyr::mutate(tumor_type = tt) %>%
+    { . }
+
+  return(formatted_coefs)
+})
+t_dat$tumor_type %<>% friendly_factor
+
+# ggtitle(parse(text = glue('{tumor_types_inv[tt]}~',
+#     '"- adj. "*italic(R)^2==\\
+#     {signif(summary(mod)$adj.r.squared, 3)}')))
+
+p2 <-
+  forest_plot(t_dat, x_var = 'label', bg_var = NULL) +
+  # scale_x_discrete(name = '') +
+  ylab(expression('Additive contribution to  '~Delta)) +
+  no_legend +
+  facet_wrap(~tumor_type, ncol = 3, scales = 'free_x')
+
+print_plot(p2,
+  fn = file.path(img_loc,
+    glue('combined_forest_plot.png')
+  ), h = 50, w = 20)
+```
+
+## Ridge variable importance
+
+Use a ridge model to learn which variables contribute in what way to
+the response variable. An issue here is that including interaction
+terms substantially improves CV-prediction, but that interaction terms
+are not easily interpretable. Wanting to 'marginalize' all interaction
+terms to obtain single contributions of individual terms to the
+overall response variable
+
+```{r, warning=FALSE}
+source(file.path('~/antigenic_space', 'maarten-analyses',
+    'immune_editing', 'continuous_IE_detection_init.R'))
+
+t_dat <- map_dfr(levels(f_setting_dtf$tumor_type)[1], function(tt) {
+  t_dat <- f_setting_dtf[tumor_type == tt]
+
+  lm_mod <- fit_meta_lm(t_dat, method = 'lm')
+  ridge_mod <- fit_meta_lm(t_dat, method = 'ridge')
+  MM <- attr(ridge_mod, 'MM')
+
+  variable_weights <- enframe(colSums(MM), 
+    name = 'term', value = 'weight')
+
+  coef_dtf <- coef(ridge_mod, s = ridge_mod$lambda.1se) %>%
+    as.matrix %>%
+    as.data.frame() %>%
+    rownames_to_column('term') %>%
+    dplyr::rename(value = `1`) %>%
+    mutate(sep_terms = map(term, ~strsplit(.x, ':')[[1]])) %>%
+    merge(variable_weights) %>%
+    mutate(w_value = value * weight) %>%
+    arrange(w_value) %>%
+    { . }
+
+  non_zero_weights_coefs <- 
+    coef_dtf %>%
+    dplyr::filter(weight > 0) %>%
+    dplyr::filter(!grepl(':', term)) %>%
+    # dplyr::filter(term %in% names(coef_dtf$weight)) %>%
+    # { .$term[.$weight != 0] } %>%
+    pull(term) %>%
+    { . }
+
+  coef_weights <- 
+    grep(':', coef_dtf$term, invert = T, value = T) %>%
+    auto_name() %>%
+    map_dbl(function(x) {
+      with(coef_dtf, sum(value[map_lgl(sep_terms, ~x %in% .x)]))
+    }) %>% 
+    { .[names(.) %in% non_zero_weights_coefs] } %>%
+    { .[sort(names(.))] } %>%
+    enframe('term', 'integrated_estimate') %>%
+    { . }
+
+  coef_dtf <- coef_dtf %>%
+    full_join(coef_weights) %>%
+    full_join(broom::tidy(lm_mod)) %>%
+    dplyr::mutate(tumor_type = tt)
+  return(coef_dtf)
+})
+t_dat$tumor_type %<>% friendly_factor
+
+# ggtitle(parse(text = glue('{tumor_types_inv[tt]}~',
+#     '"- adj. "*italic(R)^2==\\
+#     {signif(summary(mod)$adj.r.squared, 3)}')))
+
+# print_plot(p2,
+#   fn = file.path(img_loc,
+#     glue('combined_forest_plot.png')
+#   ), h = 50, w = 20)
+```
+
+```{r, warning=FALSE}
+perc_non_zero <- mean(maartenutils::eps(t_dat$value, 0), na.rm = T)
+ggplot(t_dat, aes(x = value, y = log10(weight))) + 
+  geom_vline(xintercept = 0, linetype = 2) +
+  geom_point()
+```
+
+```{r, warning=FALSE}
+library(ggrepel)
+ggplot(t_dat, aes(x = value, y = integrated_estimate, 
+    label = term)) + 
+  geom_vline(xintercept = 0, linetype = 2) +
+  geom_abline(intercept = 0, slope = 1, linetype = 2) +
+  geom_point() + 
+  geom_text_repel(force = 10)
+```
+
+```{r, warning=FALSE}
+library(ggrepel)
+ggplot(t_dat, aes(x = estimate, y = integrated_estimate, 
+    label = term)) + 
+  geom_abline(intercept = 0, slope = 1, linetype = 2) +
+  geom_vline(xintercept = 0, linetype = 2) +
+  geom_point() + 
+  geom_text_repel(force = 10)
+```
+
+
+```{r, warning=FALSE}
+library(GGally)
+
+hl_dot <- function(data, mapping, ...) {
+  library(ggrepel)
+  ggplot(data = data, mapping = mapping) +
+    geom_vline(xintercept = 0, color = 'grey80', linetype = 1) +
+    geom_hline(yintercept = 0, color = 'grey80', linetype = 1) +
+    geom_vline(xintercept = 0, color = 'grey10') +
+    geom_point(data = data) +
+    geom_text_repel(data = filter(data, hl == T))
+}
+
+
+t_dat %>%
+  dplyr::mutate(hl = T) %>%
+  select(
+    # term,
+    'lm_estimate' = estimate, 
+    'ridge_estimate' = value, 
+    'ridge_int_estimate' = integrated_estimate,
+    hl
+  ) %>%
+  ggpairs(
+    mapping = ggplot2::aes(label = term),
+    lower = list(continuous = hl_dot)
+  ) + theme_classic()
+```
+
+```{r, warning=FALSE}
+library(furrr)
+plan(multicore, workers = 32)
+t_dat <- future_map_dfr(1:3, function(tt) {
+  data.frame(tt = tt)
+})
+```
+
+# RF variable importance estimation
+
+```{r, warning=FALSE}
+source(file.path('~/antigenic_space', 'maarten-analyses',
+    'immune_editing', 'continuous_IE_detection_init.R'))
+
+pacman::p_load('tidymodels')
+pacman::p_load('ranger')
+
+plot_reconstruction_error = F
+
+library(furrr)
+plan(multicore, workers = 32)
+plan(transparent)
+plan(multicore, workers = 4)
+
+t_dat <- future_map_dfr(levels(f_setting_dtf$tumor_type), 
+  function(tt) {
+  t_dat <- f_setting_dtf[tumor_type == tt]
+  t_dat_split <- initial_split(t_dat, prop = 3/4)
+  t_dat_cv <- vfold_cv(training(t_dat_split))
+
+  grp_vars <- c('focus_allele', 'VE_threshold',
+    'patient_inclusion_crit', 'expression_threshold', 'LOH_HLA',
+    'analysis_name', 'sts_filtering', 'percentile_rank',
+    'overlap_var')
+
+  c_formula <-
+    sprintf('yr_fractional_change ~ %s',
+      paste(grp_vars, collapse = ' + ')) %>%
+    as.formula()
+
+  rf_model <- 
+    rand_forest() %>%
+    set_args(mtry = tune()) %>%
+    set_engine('ranger', importance = 'impurity') %>%
+    set_mode('regression') 
+
+  t_recipe <- recipe(c_formula, data = t_dat) 
+
+  rf_workflow <- workflow() %>%
+    add_recipe(t_recipe) %>%
+    add_model(rf_model)
+
+  param_final <- rf_workflow %>%
+    tune_grid(
+      resamples = t_dat_cv,
+      grid = expand.grid(mtry = 3:length(grp_vars))
+    ) %>%
+    select_best(metric = "rmse")
+
+  rf_workflow <- rf_workflow %>%
+    finalize_workflow(param_final)
+
+  rf_fit <- rf_workflow %>%
+    last_fit(t_dat_split)
+
+  RMSE <- rf_fit %>% 
+    collect_metrics() %>%
+    filter(.metric == 'rmse') %>%
+    pull(.estimate)
+
+  R2 <- rf_fit %>% 
+    collect_metrics() %>%
+    filter(.metric == 'rsq') %>%
+    pull(.estimate)
+
+  if (plot_reconstruction_error) {
+    test_predictions <- rf_fit %>% collect_predictions()
+    test_predictions <- test_predictions %>% 
+      mutate(frac_error = (.pred - yr_fractional_change) / 
+        yr_fractional_change)
+    test_predictions <- test_predictions %>% 
+      mutate(abs_error = abs(.pred - yr_fractional_change))
+    test_predictions$n_patients <- 
+      t_dat[test_predictions$.row, n_patients]
+    test_predictions$norm_scale <- 
+      t_dat[test_predictions$.row, norm_scale]
+    test_predictions %>% 
+      dplyr::filter(abs(abs_error) > .4) %>% 
+      print(n = 1000, max.lines = 1000, width = 100)
+
+    RMSE_lab <- parse(text = glue('italic(RMSE)=={signif(RMSE, 3)}'))
+    R2_lab <- parse(text = glue('italic(R)^2=={signif(R2, 3)}'))
+    print_plot(
+      qplot(y = .pred, x = yr_fractional_change, color = n_patients,
+        data = test_predictions) + 
+        annotate_npc(RMSE_lab, .05, .95, hjust = 0, vjust = .5) +
+        annotate_npc(R2_lab, .05, .85, hjust = 0, vjust = .5) +
+        geom_abline(slope = 1, intercept = 0, linetype = 2) +
+        xlab(expression(Delta)) +
+        ylab(expression('Random forest '~hat(Delta))) +
+        scale_colour_viridis_c(name = '# patients') +
+        right_legend
+      , fn = file.path(img_loc, glue('RF_test_set_error-{tt}.png'))
+      , w = 8.7, h = 8.7
+    )
+  }
+
+  final_model <- fit(rf_workflow, t_dat)
+  ranger_obj <- pull_workflow_fit(final_model)$fit
+  out <- enframe(ranger_obj$variable.importance, 
+    'term', 'imp') %>%
+    dplyr::mutate(tumor_type = tt) %>%
+    dplyr::mutate(RMSE = RMSE) %>%
+    dplyr::mutate(R2 = R2) %>%
+    dplyr::mutate(norm_imp = imp / sum(imp, na.rm = T)) %>%
+    dplyr::mutate(project_extended = tumor_types_inv[tt]) %>%
+    dplyr::mutate(project_extended = factor(project_extended,
+        levels = levels(f_setting_dtf$project_extended))) %>%
+    { . }
+
+  return(out)
+})
+
+analysis_counts <- f_setting_dtf[, .N, by = tumor_type]
+sum_stats <- t_dat %>% 
+  group_by(tumor_type) %>% 
+  summarize('total_imp' = sum(imp))
+
+t_dat <- t_dat %>% 
+  left_join(sum_stats) %>%
+  left_join(analysis_counts)
+
+t_dat$tumor_type <- factor(t_dat$tumor_type, 
+  levels = levels(f_setting_dtf$tumor_type))
+t_dat$project_extended <- factor(t_dat$project_extended, 
+  levels = levels(f_setting_dtf$project_extended))
+```
+
+```{r, warning=FALSE}
+ggplot(t_dat, aes(x = project_extended, y = norm_imp, fill = term)) + 
+  geom_col() +
+  right_legend +
+  scale_y_continuous('Relative feature importance', expand = c(0, 0)) +
+  scale_x_discrete(name = '', expand = c(0, 0), 
+    labels = sapply(levels(f_setting_dtf$project_extended), 
+      function(x) parse(text = x))) +
+  coord_flip()
+```
+
+```{r, warning=FALSE}
+t_dat %>%
+  dplyr::filter(term != 'focus_allele') %>%
+  group_by(project_extended) %>%
+  dplyr::mutate(norm_imp = imp / sum(imp, na.rm = T)) %>%
+  ggplot(aes(x = project_extended, y = norm_imp, fill = term)) + 
+  geom_col() +
+  right_legend +
+  scale_y_continuous('Relative feature importance', expand = c(0, 0)) +
+  scale_x_discrete(name = '', expand = c(0, 0), 
+    labels = sapply(levels(f_setting_dtf$project_extended), 
+      function(x) parse(text = x))) +
+  coord_flip()
+```
+
+
+# Negative control
+
+```{r, warning=FALSE}
+source(file.path('~/antigenic_space', 'maarten-analyses',
+    'immune_editing', 'continuous_IE_detection_init.R'))
+
+#' Simulate test data and fit a rlm model
+#'
+#'
+sim_and_test <- function(b0, b1, eps, zero_inflate = F, ...) {
+  s_dtf <- purrr::exec(simulate_random_data,
+    b0 = b0, b1 = b1, eps = eps, zero_inflate = zero_inflate)
+  res <- fit_rlm_model(s_dtf$dtf)
+  res[setdiff(names(res), 'lm')]
+}
+
+
+model_grid <-
+  expand_grid(
+    b0 = .5,
+    b1 = seq(-3 * abs(b0), 3 * abs(b0), by = abs(b0)),
+    eps = seq(0, abs(b0), length.out = 3),
+    zero_inflate = c(F, T),
+    rep = 1:10
+  )
+
+plan(multicore, workers = 32)
+all_tests <- model_grid %>%
+  # pmap_dfr(sim_and_test) %>%
+  future_pmap_dfr(sim_and_test) %>%
+  { cbind(model_grid, .) }
+```
+
+```{r, warning=FALSE}
+x_scale <-
+  scale_x_continuous(
+    name = expression(beta[1]~'in multiples of intercept'),
+    breaks = unique(all_tests$b1),
+    labels = unique(all_tests$b1 / abs(all_tests$b0))
+  )
+
+colour_scale <-
+  scale_colour_discrete(
+    name = 'Noise level\nin multiples of intercept',
+    breaks = unique(all_tests$eps),
+    labels = unique(all_tests$eps / abs(all_tests$b0))
+  )
+
+facet_ <- facet_wrap(~zero_inflate, labeller = 'label_both')
+
+p_delta <- ggplot(all_tests,
+  aes(y = yr_fractional_change, x = b1, colour = as.factor(eps))) +
+  geom_point(size = .5) +
+  ylab(expression(hat(Delta))) +
+  colour_scale +
+  x_scale +
+  facet_
+
+p_delta_e <- ggplot(all_tests,
+  aes(y = norm_scale, x = b1, colour = as.factor(eps))) +
+  geom_point(size = .5) +
+  ylab('Normalized MAD of residuals') +
+  colour_scale +
+  x_scale +
+  facet_
+
+library(patchwork)
+print_plot(p_delta / p_delta_e + plot_layout(guides = 'collect'),
+  fn = file.path(img_loc,
+    glue('negative_control_noise_vs_norm_scale\\
+      {make_flag(model_name)}.png')
+  ), h = 10, w = 8.7)
+```
+
+RLM fits for error-less simulations are likely to not converge
+
+```{r, warning=FALSE}
+all_tests %>%
+  group_by(b0, b1, zero_inflate, eps) %>%
+  summarize(conv = mean(converged)) %>%
+  print(n = 1000)
+# p_convergence <- ggplot(all_tests,
+#   aes(y = b0, x = b1, fill = mean(converged))) +
+#   geom_tile() +
+#   facet_
+```

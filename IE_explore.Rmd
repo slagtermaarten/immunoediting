@@ -1,0 +1,238 @@
+```{r, warning=FALSE}
+source('~/antigenic_space/bin/init.R')
+# devtools::load_all(file.path('~/libs', 'maartenutils'))
+source(file.path('~/antigenic_space', 'maarten-analyses', 'immune_editing',
+                 'continuous_IE_detection_init.R'))
+source(file.path('~/antigenic_space', 'maarten-analyses', 'immune_editing',
+                 'pan_IE_settings_heatmap.R'))
+source('~/libs/maartenutils/R/plotting.R')
+# devtools::install_github('jokergoo/ComplexHeatmap')
+ncores = 36
+ncores = 1
+
+tidyr::expand_grid(
+    pick_allele_method = c('dplyr_conservative', 'DT_careful', 
+      'dplyr_aggressive'),
+    filter_intercept = c('none', 'positive', 'negative')
+  ) %>%
+  purrr::pmap(function(pick_allele_method, filter_intercept) {
+    o_fn <- tryCatch(plot_pan_IE_heatmap(
+      tumor_type = "Pan*'-'*cancer",
+      adaptive_p_val_bound = F,
+      redo = T,
+      ncores = ncores,
+      fill_var = 'yr_fractional_change',
+      z_normalize = T,
+      pick_allele_method = pick_allele_method,
+      restrict_to_powered_analyses = F,
+      filter_intercept = filter_intercept,
+      output_format = 'png',
+      parse_labels = FALSE,
+      cell_size_determinant = 'p_val',
+      p_val_bound = .25,
+      do_test_grobs = F
+    ), error = function(e) { print(e) }) 
+  })
+```
+
+```{r, warning=FALSE}
+args <- dtf[idx] %>% 
+  pan_IE_res_to_call_args() %>%
+  append(c('z_normalize' = F)) %>%
+  modifyList(list(redo = F))
+test <- rlang::exec(test_continuous_IE, !!!args, reg_method = rm) 
+```
+
+
+```{r, warning=FALSE}
+dtf <- prep_pan_IE_heatmap(
+  tumor_type = "Pan*'-'*cancer",
+  ncores = ncores,
+  fill_var = 'depletion_max',
+  z_normalize = T,
+  pick_allele_method = pick_allele_method,
+  filter_intercept = 'none',
+  cell_size_determinant = 'p_val',
+  p_val_bound = .25,
+  do_test_grobs = F
+)
+```
+
+```{r, warning=FALSE}
+pacman::p_load('brms')
+example(hypothesis.brmsfit, run.dontrun = T, ask = T)
+```
+
+# Explore example scatters
+
+Get all analyses...
+
+```{r, warning=FALSE}
+source('~/antigenic_space/bin/init.R')
+source(file.path('~/antigenic_space', 'maarten-analyses', 'immune_editing',
+                 'continuous_IE_detection_init.R'))
+pe = "Pan*'-'*cancer"
+dtf <- prep_pan_IE_heatmap(
+    tumor_type = pe,
+    include_non_ds_tallies = T,
+    ncores = ncores,
+    fill_var = 'estimate',
+    reg_method = 'bayesian_biased',
+    z_normalize = F,
+    pick_allele_method = 'est_error',
+    filter_intercept = 'none',
+    cell_size_determinant = 'log2_est_error',
+    filter_error = 0,
+    make_filtering_diagnostic_plots = T,
+    do_test_grobs = F
+  )
+```
+
+Select an especially interesting one...
+
+```{r, warning=FALSE}
+devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
+# devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
+source(file.path('~/antigenic_space', 'maarten-analyses', 'immune_editing',
+                 'continuous_IE_detection_init.R'))
+
+args <- dtf[star == 'L'][order(yr_fractional_change)][1] %>%
+  pan_IE_res_to_call_args() %>%
+  append(c('z_normalize' = F)) %>%
+  modifyList(list(redo = F, reg_method = 'bayesian_biased', 
+      project_extended = pe))
+  
+prep <- call_func(prep_cont_IE_analyses, args)
+
+## Anecdotally compare different models
+r_lm <- call_func(test_continuous_IE, 
+  modifyList(args, list('reg_method' = 'rlm_one_group')))$stats[[pe]][[1]]$lm
+r_z_lm <- call_func(test_continuous_IE, 
+  modifyList(args, list('reg_method' = 'rlm_one_group', 'z_normalize' = T))) %>%
+  { .$stats[[pe]][[1]]$lm }
+b_lm <- fit_bayesian_regression(prep$dtf, return_val = 'lm')
+stored_lm <- call_func(test_continuous_IE, args)$stats[[pe]][[1]]
+stored_lm[c('intercept_estimate', 'ol_estimate')]
+```
+
+```{r, warning=FALSE}
+source(file.path('~/antigenic_space', 'maarten-analyses', 'immune_editing',
+                 'continuous_IE_detection_init.R'))
+
+plot_id <- paste(args[analysis_grp_vars], collapse = '-') %>%
+  paste0('-rlm')
+p <- plot_PS_vs_yr(dtf = prep$dtf, reg_method = 'rlm_one_group', lm = r_lm)
+ggsave(file.path(img_loc, glue('example_scatter-{plot_id}.png')), p)
+
+plot_id <- paste(args[analysis_grp_vars], collapse = '-') %>%
+  paste0('-bayesian_biased')
+p <- plot_PS_vs_yr(dtf = prep$dtf, reg_method = 'bayesian_biased', lm = b_lm)
+ggsave(file.path(img_loc, glue('example_scatter-{plot_id}.png')), p)
+
+```
+
+# Compare robust and bayesian models
+
+```{r, warning=FALSE}
+source(file.path('~/antigenic_space', 'maarten-analyses', 
+    'immune_editing', 'continuous_IE_detection_init.R'))
+
+sample_subs <- dtf[order(yr_fractional_change)][log2_est_error < 0]
+
+idx <- 100
+## Big difference between priors
+idx = 67
+
+pe = "Pan*'-'*cancer"
+
+compare_methods <- function(idx = sample(1:nrow(sample_subs), 1)) {
+  args <- sample_subs[idx] %>% 
+    pan_IE_res_to_call_args() %>%
+    append(c('z_normalize' = F)) %>%
+    modifyList(list(redo = F))
+
+  res <- purrr::map_dfr(c('bayesian_unbiased', 'bayesian'), function(rm) {
+    test <- rlang::exec(test_continuous_IE, !!!args, reg_method = rm) 
+    l <- test$stats[[pe]][[1]]
+    # print(l[c('estimate', 'intercept_estimate', 'ol_estimate', 'evid_ratio')])
+    return(l)
+  })
+
+  rlm_test <- rlang::exec(test_continuous_IE, !!!args, 
+    reg_method = 'rlm_one_group')$stats[[pe]][[1]] %>%
+    { .[c('intercept', 'rc', 'p_val')] }
+
+  # print(rlm_test)
+  # print(res[res$sampling_convergence, c('estimate', 'intercept_estimate', 'ol_estimate', 'evid_ratio')])
+  browser()
+  args
+
+  tibble(
+    idx = idx,
+    bayesian_intercept = res$intercept_estimate,
+    bayesian_rc = res$ol_estimate,
+    bayesian_prior = res$used_prior,
+    rlm_intercept = rlm_test$intercept,
+    intercept_change = (res$intercept_estimate - rlm_test$intercept) / 
+      rlm_test$intercept,
+    om_change = (res$ol_estimate - rlm_test$intercept) / rlm_test$intercept,
+    intercept_change_abs = res$intercept_estimate - rlm_test$intercept,
+    om_change_abs = res$ol_estimate - rlm_test$intercept
+  )
+}
+
+compare_methods(67)
+print(compare_methods(), n = 1000, width = 1000)
+```
+
+
+GSEA approach, are particular settings enriched in the top or bottom of analyses
+ranked by a variable of interest (e.g. yr_fractional_change or evid_ratio)?
+
+```{r, warning=FALSE}
+library(fgsea)
+
+data(examplePathways)
+data(exampleRanks)
+
+var <- 'LOH_HLA'
+var <- 'focus_allele'
+levs <- dtf[, unique(get(var))]
+pathways <- map(auto_name(levs), ~.x)
+ranks <- dtf[order(estimate / est_error), setNames(1:.N, get(var))]
+# dtf[order(estimate / est_error)]
+# qplot(log2(evid_ratio), estimate / est_error, data = dtf)
+```
+
+This doesn't work as it's only sensitive the most dominant variable of sorting.
+We need a method that can detect both dominant and subdominant effects
+though.
+
+```{r, warning=FALSE}
+N_reps <- 1000
+# ranks <- setNames(1:(uniqueN(levs)*N_reps), rep(levs, each = N_reps))
+ranks <- dtf[order(estimate / est_error), 
+  setNames(estimate / est_error, get(var))]
+tapply(ranks, names(ranks), mean)
+fgseaRes <- suppressWarnings(fgseaMultilevel(
+  pathways = pathways, 
+  stats    = ranks,
+  scoreType = 'pos',
+  minSize  = 1,
+  maxSize  = 1
+))
+print(fgseaRes)
+plotGseaTable(pathways, ranks, fgseaRes, gseaParam=0.5)
+```
+
+
+Does immune editing at all affect the relationship between T-cell infiltration
+and foreignness?
+
+```{r, warning=FALSE}
+cor_dtf <- readRDS(file.path(rds_dir, 'xcell_neo_immune_correlations.rds'))
+```
+
+
+Differences in estimation error between HLA alleles
+

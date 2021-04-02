@@ -1,0 +1,31 @@
+Twofold definition of statistical power in our regression analysis:
+
+* Given sample size and data variance, the required effect size (i.e. slope) for
+  statistical significance.
+* Given sample size, data variance and a pre-determined
+  (population) effect size $\theta$ (e.g. 1
+  loss in unit dependent variable per unit HLA score), the probability to
+  reject the null hypothesis from the observed data
+
+$$ B(\theta) = 1 - \PHI(t - \frac{\theta}{\sigma_{D} / \sqrt{N}}
+
+where $t$ is the critical value specific to the tumor type, variable
+and patient selection. How to adjust $t$ to multiple testing correction?
+
+```{r, warning=FALSE}
+install.packages('pwr')
+library(pwr)
+pwr.f2.test
+```
+
+```{r, warning=FALSE}
+source('/DATA/research_projects/antigenic_space/maarten-analyses/immune_editing/continuous_IE_detection_helpers.R')
+
+# optim_compute_power_continuous_IE()
+# test_continuous_IE(redo = T)
+# test_continuous_IE(focus_allele = 'A1101', redo = T)
+
+compute_power_continuous_IE_formal(redo = T)
+```
+
+

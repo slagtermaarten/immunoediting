@@ -1,0 +1,651 @@
+
+```{r, warning=FALSE, echo=FALSE}
+## Identify peptides that are in all tables
+
+# pep_present <- plyr::llply(1:nrow(param_table), function(i) {
+# all_peps
+# all_AB_hlas
+# peptides_shared_AB <- purrr:reduce(all_AB_hlas, function(hla_allele) {
+peptides_shared_AB <- all_peps
+for (hla_allele in all_AB_hlas) {
+  pg <- DBI::dbDriver('PostgreSQL')
+  conn <- RPostgreSQL::dbConnect(pg,
+    user = 'm.slagter', dbname = 'binding_affinity')
+  query <- dbSendQuery(conn, 'SELECT "peptide", "percentile_rank" FROM "A0201"')
+  dbClearResult(conn)
+  hla_table <- tbl(conn, hla_allele)
+  BA_predictor <- BindingPredictor$new(hla_allele = hla_allele, verbose = F)
+  dtf <- BA_predictor$query(all_peps, ncores = 32)
+  RPostgreSQL::dbDisconnect(conn)
+  missing_peps <- setdiff(peptides_shared_AB, dtf$peptide)
+  cat('missing_peps for:', hla_allele, '\n',
+    paste(missing_peps, collapse = ', '))
+  peptides_shared_AB <- intersect(peptides_shared_AB, dtf$peptide)
+}
+```
+
+
+```{r, warning=FALSE, echo=FALSE}
+unloadNamespace('fasanalysis')
+devtools::load_all(file.path('~/libs', 'maartenutils'))
+library(quickMHC)
+devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
+source(file.path('~/antigenic_space', 'libs', 'fasanalysis', 'R',
+    '2-read_data.R'))
+library(RPostgreSQL)
+library(glue)
+library(dbplyr)
+
+invisible(w_readRDS('optitype_tcga'))
+all_AB_hlas <-
+  optitype_tcga[, unique(c(`hla_a1`, `hla_a2`, `hla_b1`, `hla_b2`))] %>%
+  sort %>% quickMHC::shortenHLA()
+
+all_C_hlas <- optitype_tcga[, unique(c(`hla_c1`, `hla_c2`))] %>%
+  sort %>% quickMHC::shortenHLA()
+
+tumor_peps <- all_peps
+
+hla_class_dat <- copy(w_readRDS('hla_class_dat'))
+setkey(hla_class_dat, donor_id)
+options(warn = 1)
+analysis_version <- 3
+dir.create(file.path(rds_dir, sprintf('V%d', analysis_version)),
+  showWarnings = F)
+
+param_table <- expand.grid(
+  'donor_id' = hla_class_dat[, donor_id],
+  'anchor_hla_allele' = hlas,
+  'pr' = 1.9)
+
+pr_ancillary <- 4
+```
+
+```{r, warning=FALSE, echo=FALSE}
+## Index all tables
+
+ncores = 1
+ncores = 36
+doParallel::stopImplicitCluster()
+if (ncores > 1) {
+  doParallel::registerDoParallel(cores = ncores)
+}
+
+
+plyr::l_ply(c(all_AB_hlas, all_C_hlas), function(hla_allele) {
+  pg <- DBI::dbDriver('PostgreSQL')
+  conn <- RPostgreSQL::dbConnect(pg,
+    user = 'm.slagter', dbname = 'binding_affinity')
+  on.exit(RPostgreSQL::dbDisconnect(conn))
+  message(hla_allele)
+  if (ncores == 1) browser()
+
+  gq <- function(query, con = conn) {
+    tryCatch(dbGetQuery(con, glue(query)), 
+      error = function(e) print(e))
+  }
+
+  sq <- function(query, con = conn) {
+    tryCatch(dbSendQuery(con, glue(query)), 
+      error = function(e) print(e))
+  }
+
+  sq('CREATE TABLE "{hla_allele}_temp" (LIKE "{hla_allele}");')
+  sq('INSERT INTO "{hla_allele}_temp"("peptide", "peptide_score_log50k", "affinity", "percentile_rank")
+    (SELECT DISTINCT ON ("peptide") "peptide", "peptide_score_log50k", "affinity", "percentile_rank" FROM "{hla_allele}");')
+  N_rows_cleaned <- 
+    gq('SELECT count(peptide) FROM "{hla_allele}"')[1, 1] -
+    gq('SELECT count(peptide) FROM "{hla_allele}_temp"')[1, 1]
+  message(glue('{hla_allele}: cleaned {N_rows_cleaned} rows'))
+  sq('DROP TABLE "{hla_allele}" CASCADE;')
+  sq('ALTER TABLE "{hla_allele}_temp" RENAME TO "{hla_allele}";')
+  sq('CREATE UNIQUE INDEX "{hla_allele}_idx" ON "{hla_allele}" (peptide);')
+}, .parallel = ncores > 1)
+```
+
+```{r, warning=FALSE, echo=FALSE}
+ncores = 32
+ncores = 20
+ncores = 42
+ncores = 20
+ncores = 1
+ncores = 36
+ncores = 40
+doParallel::stopImplicitCluster()
+if (ncores > 1) {
+  doParallel::registerDoParallel(cores = ncores)
+}
+## ROs, computed inside of the DB
+ROs <- plyr::llply(1:nrow(param_table), function(i) {
+  pr <- param_table[i, 'pr']
+  anchor_hla_allele <- as.character(param_table[i, 'anchor_hla_allele'])
+  donor_id <- as.character(param_table[i, 'donor_id'])
+
+  res_fn <- file.path(rds_dir,
+    glue('V{analysis_version}/V{analysis_version}_batch_{i}.rds'))
+  if (file.exists(res_fn)) {
+    res <- tryCatch(readRDS(res_fn), error = function(e) { NULL })
+    if (!is.null(res) && length(res) > 0)
+      return(res)
+  }
+
+  mymessage(sprintf('batch %d/%d', i, nrow(param_table)))
+
+  # install.packages('RPostgres')
+  # library('RPostgres')
+  pg <- DBI::dbDriver('PostgreSQL')
+  conn <- RPostgreSQL::dbConnect(pg,
+    user = 'm.slagter', dbname = 'binding_affinity')
+  on.exit(RPostgreSQL::dbDisconnect(conn))
+
+  donor_AB_hlas <-
+    hla_class_dat[donor_id, c(hla_a1, hla_a2, hla_b1, hla_b2)] %>%
+    setdiff(anchor_hla_allele)
+  donor_C_hlas <-
+    hla_class_dat[donor_id, c(hla_c1, hla_c2)] %>%
+    setdiff(anchor_hla_allele)
+  analysis_hlas <- c(donor_AB_hlas, donor_C_hlas)
+
+  ## Name of (temp) table to be made inside of the RDB
+  view_name <- glue('
+    promiscuity_{gsub("TCGA|-|\\\\.", "", donor_id)}\\
+    _{anchor_hla_allele}\\
+    _{gsub("\\\\.", "", pr)}\\
+    _{gsub("\\\\.", "", pr_ancillary)}') %>%
+    tolower()
+
+  ## SQL statement to compute whether a peptide is presented by some of the
+  ## patient's HLAs, which I call promiscuous peptides
+  select_statement <- sapply(analysis_hlas,
+    function(hla_allele) {
+    glue('"{hla_allele}_pr" <= {pr_ancillary}')
+  }) %>% paste(collapse = ' OR ') %>%
+  c('AS promiscuous') %>% paste(collapse = ' ')
+
+  ## Statement to merge tables for the relevant HLAs, such that only peptides
+  ## for which data is available in all data bases is returned
+  join_statement <- purrr::imap(analysis_hlas,
+    function(hla_allele, idx) {
+      glue('INNER JOIN
+          (SELECT "peptide", "percentile_rank" AS "{hla_allele}_pr"
+            FROM "{hla_allele}") t{idx+1}
+        ON ("t1"."peptide" = "t{idx+1}"."peptide")
+      ')
+    }) %>% unlist %>% paste(collapse = ' ')
+
+    # IF EXISTS(SELECT 1 FROM sys.views WHERE Name = "{view_name}")
+    # GO
+  # dbSendQuery(conn, glue('
+  #   IF EXISTS (SELECT 1 FROM pg_views WHERE "viewname" = \'{view_name}\')
+  #   BEGIN
+  #     DROP VIEW "{view_name}";
+  #   END
+  # '))
+
+  tryCatch(dbSendQuery(conn, glue('DROP VIEW "{view_name}";')),
+    error = function(e) { })
+
+  res <- dbGetQuery(conn, glue('
+    CREATE VIEW {view_name} AS
+      SELECT "t1"."peptide", {select_statement}
+      FROM (
+          (SELECT "{anchor_hla_allele}"."peptide",
+          "{anchor_hla_allele}"."percentile_rank" AS "{anchor_hla_allele}_pr"
+          FROM "{anchor_hla_allele}" WHERE "percentile_rank" <= {pr}) t1
+          {join_statement}
+      );
+
+    SELECT avg(promiscuous::int) FROM {view_name};
+  '))
+  # dbClearResult(dbListResults(conn)[[1]])
+
+  res <- list(
+    'donor_id' = donor_id,
+    'hla' = anchor_hla_allele,
+    'N_anchor_peps' = NA,
+    'frac_peps_promiscuous' = NA,
+    'frac_peps_promiscuous_wC' = res[1, 1])
+
+  mymessage(sprintf('finished batch %d/%d', i, nrow(param_table)))
+  saveRDS(res, res_fn)
+  return(res)
+}, .parallel = ncores > 1) %>% rbindlist(fill = T)
+```
+
+```{r, warning=FALSE, echo=FALSE}
+devtools::load_all(file.path('~/libs', 'maartenutils'))
+devtools::load_all(file.path('~/libs', 'quickMHC'))
+devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
+
+invisible(w_readRDS('optitype_tcga'))
+all_hlas <-
+  optitype_tcga[, unique(c(
+      `hla_a1`, `hla_a2`, `hla_b1`, `hla_b2`, `hla_c1`, `hla_c2`))] %>%
+  sort %>% quickMHC::shorten_HLA()
+
+ncores = 32
+tumor_peps <- all_peps
+log_file <- sprintf('%s.log', format(Sys.time(), '%Y%M%d_%H%M'))
+
+hla_class_dat <- copy(w_readRDS('hla_class_dat'))
+setkey(hla_class_dat, donor_id)
+options(warn = 1)
+
+param_table <- expand.grid(
+  'donor_id' = hla_class_dat[, donor_id],
+  'anchor_hla_allele' = hlas,
+  'pr' = 1.9)
+
+if (ncores > 1) {
+  if (exists('cl')) {
+    stopCluster(cl)
+    rm('cl')
+  }
+  cl <- parallel::makeCluster(ncores, type = 'FORK', outfile = log_file)
+  # doParallel::registerDoParallel(cores = ncores)
+  clusterExport(cl, 'param_table')
+  clusterExport(cl, 'hla_class_dat')
+  clusterExport(cl, 'tumor_peps')
+  clusterEvalQ(cl, {
+    unloadNamespace('fasanalysis')
+    unloadNamespace('maartenutils')
+    unloadNamespace('quickMHC')
+    devtools::load_all(file.path('~/libs', 'maartenutils'))
+    devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
+    devtools::load_all(file.path('~/libs', 'quickMHC'))
+    pg <- DBI::dbDriver('PostgreSQL')
+    conn <- RPostgres::dbConnect(pg,
+      user = 'm.slagter', dbname = 'binding_affinity')
+    # on.exit(RPostgres::dbDisconnect(conn))
+  })
+}
+
+process_idx <- function(i) {
+  pr <- param_table[i, 'pr']
+  anchor_hla_allele <- as.character(param_table[i, 'anchor_hla_allele'])
+  donor_id <- as.character(param_table[i, 'donor_id'])
+  mymessage(sprintf('batch %d/%d', i, nrow(param_table)))
+
+  pg <- DBI::dbDriver('PostgreSQL')
+  conn <- RPostgres::dbConnect(pg,
+    user = 'm.slagter', dbname = 'binding_affinity')
+  on.exit(RPostgres::dbDisconnect(conn))
+
+  anchor_table <- tbl(conn, anchor_hla_allele)
+  anchor_peps_table <- anchor_table %>%
+    filter(percentile_rank <= pr) %>%
+    select(peptide) %>%
+    distinct %>%
+    collect
+
+  ## Amount of anchor peps before filtering them for co-presentation by other
+  ## alleles
+  N_anchor_peps <- nrow(anchor_peps_table)
+
+  donor_hlas <-
+    hla_class_dat[donor_id,
+      c(hla_a1, hla_a2, hla_b1, hla_b2, hla_c1, hla_c2)] %>%
+    setdiff(anchor_hla_allele)
+  N_donor_hlas <- length(donor_hlas)
+
+  ## Query the other alleles of the donor for presentation of the peptides
+  ## presented by the anchor allele
+  for (l_hla in donor_hlas) {
+    ancillary_table <- tbl(conn, l_hla)
+    ancillary_res <- ancillary_table %>%
+      filter(percentile_rank <= pr &
+        peptide %in% anchor_peps_table$peptide) %>%
+      select(peptide) %>%
+      collect
+    if (!null_dat(ancillary_res)) {
+      anchor_peps_table <- anchor_peps_table %>%
+        filter(!peptide %in% ancillary_res$peptide)
+    }
+  }
+
+  res <- list(
+    'donor_id' = donor_id,
+    'hla' = anchor_hla_allele,
+    'N_anchor_peps' = N_anchor_peps,
+    'frac_peps_promiscuous' = 1 - (row(anchor_peps_table) / N_anchor_peps))
+
+  mymessage(sprintf('finished batch %d/%d', i, nrow(param_table)))
+  rm(anchor_peps_table)
+  gc()
+  return(res)
+}
+
+ROs <- parLapply(cl, 1:nrow(param_table), process_idx) %>% rbindlist(fill = T)
+
+if (ncores > 1) {
+  clusterEvalQ(cl, {
+    RPostgres::dbDisconnect(conn)
+  })
+  stopCluster(cl)
+  rm('cl')
+}
+
+
+setkey(ROs, donor_id, hla)
+ROs <- controlled_merge(ROs, hla_class_dat, by_cols = 'donor_id')
+ROs[, 'anchor_present' :=
+  hla %in% c(hla_a1, hla_a2, hla_b1, hla_b2, hla_c1, hla_c2), by = 1:nrow(ROs)]
+saveRDS(ROs, file.path(rds_dir, 'ROs.rds'))
+gc()
+```
+
+
+```{r, warning=FALSE, echo=FALSE}
+  if (F) {
+    ## Trying to do all of the comparisons within PostgreSQL, which should be
+    ## more efficient
+    allele_pr_name <- paste0(anchor_hla_allele, '_pr')
+    merged <- select(anchor_table, peptide, percentile_rank) %>%
+      filter(percentile_rank <= pr) %>%
+      dplyr::rename(UQ(allele_pr_name) := percentile_rank) %>%
+      mutate(promiscuous = F)
+
+    for (hla_allele in donor_AB_hlas) {
+      browser()
+      # hla_allele = donor_AB_hlas[1]
+      # allele_pr_name <- enquo(parse(text = paste0(hla_allele, '_pr')))
+      # allele_pr_name <- parse(text = paste0(hla_allele, '_pr'))
+      # allele_pr_name <- quo(as.symbol(paste0(hla_allele, '_pr')))
+      # allele_pr_name <- enquo(paste0(hla_allele, '_pr'))
+
+      new_tab <- select(tbl(conn, hla_allele), peptide, percentile_rank) #%>%
+        # filter(percentile_rank <= pr_ancillary)
+
+      merged <- dplyr::left_join(merged, new_tab, by = 'peptide')
+      pre_promisc <- select(merged, promiscuous) %>% collect %>%
+        unlist %>% mean(na.rm = T)
+      merged <- dplyr::mutate(merged,
+        percentile_rank := percentile_rank <= pr_ancillary) %>%
+        dplyr::mutate(promiscuous := (promiscuous | percentile_rank)) %>%
+        dplyr::select(-percentile_rank)
+      post_promisc <- select(merged, promiscuous) %>% collect %>%
+        unlist %>% mean(na.rm = T)
+
+      new_tab %>% show_query
+      merged %>% show_query
+      quo(mutate(merged, test := UQ(allele_pr_name) <= pr_ancillary))
+      mutate(merged, test := UQ(allele_pr_name) <= pr_ancillary)
+      mutate(merged, UQ(allele_pr_name) <= pr_ancillary)
+      filter(merged, is.na(UQ(allele_pr_name))) %>% summarise(count = n())
+      filter(merged, is.null(UQ(allele_pr_name))) %>% summarise(count = n()) %>%
+        show_query
+      filter(merged, UQ(allele_pr_name) == 21.0) %>% summarise(count = n()) %>%
+        show_query()
+      filter(new_tab, UQ(allele_pr_name) == 21.0)
+      filter(new_tab, !!allele_pr_name == 21.0) %>% show_query
+      sql
+      merged
+      merged <-
+        dplyr::mutate(merged, promiscuous := enquo(allele_pr_name))
+        dplyr::mutate(merged, promiscuous := (UQ(allele_pr_name) < 5))
+        dplyr::mutate(merged, promiscuous := (allele_pr_name < 4))
+        dplyr::mutate_(merged, sprintf('promiscuous := %s <= 4', allele_pr_name))
+        # dplyr::mutate(merged, promiscuous := promiscuous | T)
+      # colnames(merged)
+    }
+  }
+```
+
+
+
+# Compute exact expected corroboration for an achor allele for a HLA repertoire
+
+2019-01-06 13:14 Yet another major revision, this will likely be final...
+
+```{r, warning=FALSE, echo=FALSE}
+# slam::simple_sparse_array(i, v, dim = rep(length(all_hlas), 5),
+#   dimnames = lapply(1:5, all_hlas))
+## Lookup from sparse matrix
+# recurse_structs <- function(HLAs, depth = 1) {
+#   if (depth == length(HLAs)) {
+#     get('L%d', depth)
+#   }
+#   sapply(1:i, function(j) {
+#   recurse_structs(depth + 1)
+# }
+
+IDL_names <- sprintf('allele_%d', 1:5)
+
+compute_intersection <- function(query_alleles = c('K', 'L')) {
+  sum(apply(bools[, query_alleles], 1, sum) == length(query_alleles))
+}
+
+complement_IDL <- function(IDL, depth) {
+  if (depth < 5) {
+    IDL <- cbind(IDL, plyr::llply(seq(5-depth),
+        function(x) rep(factor(NA), nrow(IDL))))
+  }
+  magrittr::set_colnames(IDL, IDL_names)
+}
+
+#' Recursive function adding up all the terms in the inclusion-exclusion formula
+#'
+#'
+tally_union <- function(HLAs, depth = length(HLAs)) {
+  if (depth == 0) return(0)
+  IDL <- data.frame(t(combn(HLAs, depth))) %>%
+    complement_IDL(depth)
+  ti <- sum(all_shared_counts[IDL][, shared])
+  return((-1)^(depth-1) * ti + tally_union(HLAs, depth = depth - 1))
+}
+# tally_union(HLAs, depth = 2)
+tally_union(HLAs)
+sum(apply(bools[, HLAs], 1, sum) > 0)
+```
+
+# Compute exact expected corroboration for an achor allele for a HLA repertoire
+
+2019-01-06 13:14 Yet another major revision, this will likely be final...
+
+```{r, warning=FALSE, echo=FALSE}
+# slam::simple_sparse_array(i, v, dim = rep(length(all_hlas), 5),
+#   dimnames = lapply(1:5, all_hlas))
+## Lookup from sparse matrix
+# recurse_structs <- function(HLAs, depth = 1) {
+#   if (depth == length(HLAs)) {
+#     get('L%d', depth)
+#   }
+#   sapply(1:i, function(j) {
+#   recurse_structs(depth + 1)
+# }
+
+IDL_names <- sprintf('allele_%d', 1:5)
+
+compute_intersection <- function(query_alleles = c('K', 'L')) {
+  sum(apply(bools[, query_alleles], 1, sum) == length(query_alleles))
+}
+
+complement_IDL <- function(IDL, depth) {
+  if (depth < 5) {
+    IDL <- cbind(IDL, plyr::llply(seq(5-depth),
+        function(x) rep(factor(NA), nrow(IDL))))
+  }
+  magrittr::set_colnames(IDL, IDL_names)
+}
+
+#' Recursive function adding up all the terms in the inclusion-exclusion formula
+#'
+#'
+tally_union <- function(HLAs, depth = length(HLAs)) {
+  if (depth == 0) return(0)
+  IDL <- data.frame(t(combn(HLAs, depth))) %>%
+    complement_IDL(depth)
+  ti <- sum(all_shared_counts[IDL][, shared])
+  return((-1)^(depth-1) * ti + tally_union(HLAs, depth = depth - 1))
+}
+# tally_union(HLAs, depth = 2)
+tally_union(HLAs)
+sum(apply(bools[, HLAs], 1, sum) > 0)
+```
+
+
+```{r, warning=FALSE, echo=FALSE}
+devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
+devtools::load_all(file.path('~/libs', 'maartenutils'))
+devtools::load_all(file.path('~/libs', 'quickMHC'))
+
+invisible(w_readRDS('optitype_tcga'))
+all_a_types <-
+  optitype_tcga[, c(`hla_a1`, `hla_a2`)] %>%
+  unique %>% sort %>% quickMHC::shorten_HLA()
+all_b_types <-
+  optitype_tcga[, c(`hla_b1`, `hla_b2`)] %>%
+  unique %>% sort %>% quickMHC::shorten_HLA()
+all_c_types <-
+  optitype_tcga[, c(`hla_c1`, `hla_c2`)] %>%
+  unique %>% sort %>% quickMHC::shorten_HLA()
+all_hlas <- c(all_a_types, all_b_types, all_c_types)
+
+## Enumerate the amount of potential HLA repertoires
+## 6 orders of magnitude bigger than what is maximally observed
+log10(a_allele_opts <- length(all_a_types) + ncol(combn(all_a_types, 2))) +
+log10(b_allele_opts <- length(all_b_types) + ncol(combn(all_b_types, 2))) +
+log10(c_allele_opts <- length(all_c_types) + ncol(combn(all_c_types, 2)))
+
+l_hlas = hlas
+l_hlas = all_hlas
+l_peps = all_peps
+l_peps = sample(all_peps, 2e2)
+ncores = 1
+
+N_peps <- length(l_peps)
+batch_size <- max(ceiling(N_peps / ncores), 1e4)
+batches <- split(l_peps, ceiling(seq_along(l_peps) / batch_size))
+N_batches <- length(batches)
+weights <- sapply(batches, length) %>% { ./sum(.) }
+save_bool <- T
+```
+
+```{r, warning=FALSE, echo=FALSE}
+format_BA_l <- function(hla, peps) {
+  l_hla <- hla
+  query_table <- data.frame('hla' = l_hla, 'peptide' = peps)
+  l_BA_table <- quickMHC(query_table)
+  browser(expr = l_BA_table[, any(is.na(percentile_rank))])
+  setkey(l_BA_table, peptide)
+  l_BA_table <- l_BA_table[peps, .(peptide, percentile_rank)]
+  setnames(l_BA_table, 'percentile_rank', l_hla)
+  return(l_BA_table)
+}
+
+gen_percentile_rank_by_hla_matrix <- function(hlas, peps) {
+  for (i in seq_along(hlas)) {
+    hla <- hlas[i]
+    l_BA_table <- format_BA_l(hla, peps)
+    if (i == 1) {
+      percentile_rank_by_hla <- l_BA_table
+    } else {
+      ## Iteratively add a column for each allele
+      percentile_rank_by_hla <- tryCatch(merge(
+          percentile_rank_by_hla, l_BA_table, by = 'peptide', all = F),
+        error = function(e) { print(e); browser() })
+      tryCatch(rm('l_BA_table'), error = function(e) {  })
+    }
+  }
+  return(percentile_rank_by_hla)
+}
+
+#' Compute all potential HLA intersections
+# hla_combn <- function(hlas = l_hlas, N_combs = 4) {
+#   if (N_combs == 1) {
+#     return(hlas)
+#   }
+#   types <- substr(hlas, 1, 1)
+#   combn(hlas[types == 'A'], 2)
+# }
+
+IDL_names <- sprintf('allele_%d', 1:6)
+
+complement_IDL <- function(IDL, N_picks) {
+  if (N_picks < 6) {
+    IDL <- cbind(IDL, plyr::llply(seq(6 - N_picks),
+        function(x) rep(factor(NA), nrow(IDL))))
+  }
+  magrittr::set_colnames(IDL, IDL_names)
+}
+
+list_all_relevan_intersects <- function(anchor_hla_allele = 'A0201',
+  N_picks = 2) {
+  anchor_supertype <- tolower(substr(anchor_hla_allele, 1, 1))
+  hla_class_dat <- copy(w_readRDS('hla_class_dat'))
+
+  enumerate_intersections <- function(alleles) {
+    # setdiff(alleles, anchor_hla_allele)
+    alleles <- sort(unique(alleles))
+    complement_IDL(data.frame(t(combn(alleles, N_picks))), N_picks)
+  }
+  all_intersections <- hla_class_dat[,
+    enumerate_intersections(c(hla_a1, hla_a2, hla_b1, hla_b2, hla_c1, hla_c2)),
+    by = 1:nrow(hla_class_dat)]
+  unique(all_intersections)
+}
+
+corrob_hla_holistic <- function(pr = 1.9) {
+  if (ncores > 1) {
+    doParallel::registerDoParallel(cores = ncores)
+  }
+  OMs <- plyr::llply(seq_along(batches), function(i) {
+    mymessage(sprintf('%.1f, batch %d/%d', pr, i, N_batches))
+    batch_peps <- batches[[i]]
+
+    ## Debugging purposes
+    if (T || !file.exists(gen_RDS_fn('passing_by_hla'))) {
+      passing_by_hla <- gen_percentile_rank_by_hla_matrix(l_hlas, batch_peps) %>%
+        { .[, l_hlas, with = F] <= pr }
+      mymessage(sprintf('%.1f, finished compiling peps %d/%d', pr, i, N_batches))
+      w_saveRDS('passing_by_hla')
+    } else {
+      w_readRDS('passing_by_hla')
+    }
+
+    rel_intersects <- plyr::llply(hlas, function(anchor_hla_allele) {
+      N_anchor_peps <- sum(passing_by_hla[, anchor_hla_allele])
+      bools <- passing_by_hla[passing_by_hla[, anchor_hla_allele] == T, ]
+      ## 'Compute' HLAs
+      c_hlas <- setdiff(l_hlas, anchor_hla_allele)
+      bools <- bools[, c_hlas]
+
+      ## Compute all (relevant) intersections
+      all_shared_counts <- plyr:::llply(1:6, function(N_picks) {
+        combs <- list_all_relevan_intersects(anchor_hla_allele, N_picks) %>%
+          magrittr::set_colnames(sprintf('allele_%d', 1:N_picks))
+        if (N_picks == 1) {
+          res <- diag(crossprod(bools))
+        } else {
+          res <- apply(combs, 1, function(hlas) {
+            sum(apply(bools[, hlas], 1, sum) == N_picks)
+          })
+        }
+        data.frame(combs, 'shared' = res)
+      }) %>% rbindlist(fill = T)
+      setcolorder(all_shared_counts, c(sprintf('allele_%d', 1:6), 'shared'))
+      setkeyv(all_shared_counts, c(sprintf('allele_%d', 1:6)))
+      all_shared_counts[, 'shared' := shared / N_anchor_peps]
+      return(all_shared_counts)
+    })
+
+    mymessage(sprintf('%.1f, batch %d/%d - finished OM',
+        pr, i, N_batches))
+    ## Weigh OM by the relative amount of peptides in this batch
+    ## Perform multiplication in log space to avert machine precision
+    ## underflow errors
+    # OM_w <- exp(log(OM) + log(weights[i]))
+    OM_w <- OM * weights[i]
+    return(OM_w)
+  }, .parallel = ncores > 1)
+
+  if (save_bool) {
+    saveRDS(OMs, file.path(rds_dir, sprintf('OM_%.1f.rds', pr)))
+  }
+  res <- purrr::reduce(OMs, `+`)
+  print(head(res))
+  return(res)
+}
+
+corrob_hla_holistic()
+```

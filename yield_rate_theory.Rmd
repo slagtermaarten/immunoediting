@@ -1,0 +1,318 @@
+# Basic yield rate method for detecting immune mediated neo-antigen loss
+
+
+In this work, we have chosen to restrict our main analyses to one
+particular HLA allele (HLA-A\*02:01) to allow for maximally accurate and
+consistent prediction accuracy, rather than patient HLA-haplotype matched
+predictions.  This decision entails that we analyze antigen repertoires
+the HLA repertoires of large subset (PERCENTAGE) patients actually do not
+present.  A potential bias with this approach arises as the immune system
+has been shown to sculpt the antigen repertoires of cells by selective
+killing of antigen carrying cells , a process termed immune editing, as an
+effect of unleashed immune pressure (REF Schreiber, Verdegaal).  In case
+this process would also be influential in the TCGA and ICGC samples
+currently under analysis, one would expect to see a smaller amount of
+predicted binders (i.e.  binding epitopes) per non-synonymous mutation in
+samples from donors that carry HLA allele on which predictions are
+performed (HLA\*A:02:01 in our case for optimal prediction precision) than
+in those that do not: only in the former group can predicted binding
+peptides actually be presented and immune pressure to lose these antigens and
+their associated mutations be exerted. 
+
+A straight-forward way of testing whether epitope loss occurs would be to
+compare the epitope yield rate $YR$, the ratio of predicted epitopes and
+non-synonymous mutations, between donors that have the A\*02:01 allele and
+those that do not. We compare the yield rate for tumor samples which have been
+derived from A\*02:01 carrying donors to a control group of samples derived
+from patients that do not carry an HLA-allele similar in its binding repertoire
+to A\*02:01 (REF methods for HLA clustering). We observed no difference in
+yield rates between A\*02:01 positive and negative treated naive tumor samples
+for the A\*02:01-allele, suggestive of only very weak if not completely absent
+loss of neo-epitope yielding mutations in treatment naive tumor samples as are
+present in cancer molecular characterisation projects from TCGA and ICGC.  In
+addition to arguing against antigen loss in treatment naive samples, this
+observation justifies the use of the A\*02:01-allele in order to obtain
+a antigenicity-measure that is allows for fair comparison between patients of
+different HLA haplotypes and viral epitope loads.
+
+
+INTERMEZZO
+We ask: given the variance of the $B$-values in the reference (A\*02:01-negative
+patients), what would be the required median shift in the test $B$-distribution
+(A\*02:01 positive samples) in order to obtain a Wilcoxon rank sum p-value
+smaller than .05 assuming homoskedascity?
+
+
+```{r, eval = F, warning=FALSE, echo=FALSE}
+test_dat <- donor_summary[hla_a0201_status %in% a02_defined, 
+                          .(project, hla_a0201_status, N_nonsyn, N_neos)]
+ds <- seq(0, .75, by = .005)
+
+p_dat <- test_dat[, {
+  pvals <- sapply(ds, function(d) { 
+    CR = ifelse(.SD[, hla_a0201_status] %in% a02_positive_types, (1 - d), 1)
+    YR = CR * .SD[, N_neos / N_nonsyn]
+    wilcox.test(YR ~ .SD[, hla_a0201_status], conf.int = TRUE, 
+                alternative = 'g')$p.value
+  })
+  med_diffs <- sapply(ds, function(d) { 
+    CR = ifelse(.SD[, hla_a0201_status] %in% a02_positive_types, (1 - d), 1)
+    meds <- .SD[, median(CR * N_neos / N_nonsyn, na.rm = T), 
+                by = hla_a0201_status]
+    meds[1, 2] / meds[2, 2]
+  }) %>% unlist
+  .(ds = ds, p = pvals, diffs = med_diffs)
+}, by = project]
+
+p_dat[, lapply(.SD, class)]
+```
+
+
+```{r, warning=FALSE, echo=FALSE}
+pacman::p_load(ggrepel)
+
+v_lines <- p_dat[p <= .05, .SD[which.max(p)], by = project]
+v_lines[, 'label' := paste0(project, ': ', ds)]
+
+## Exclude UCEC due to low sample count (n = 8)
+p1 <- ggplot(p_dat[project %nin% c('UCEC')], 
+             aes(x = ds, y = p, colour = project)) + 
+  geom_hline(yintercept = .05, colour = 'red', alpha = .5, linetype = 1) +
+  geom_line() +
+  # geom_point() + 
+  # geom_vline(data = v_lines, aes(xintercept = ds, colour = project), 
+  #            alpha = .5, linetype = 2) +
+  geom_point(data = v_lines, alpha = .5, size = 2) +
+  geom_label_repel(data = v_lines, 
+                   aes(label = label, fill = project), 
+                   fontface = 'bold', colour = 'white', show.guide = F, 
+                   segment.colour = 'grey50', alpha = 1, size = 3) +
+  theme_fas(legend.position = 'none') +
+  # scale_x_continuous(name = 'Fractional decrease YR in A*02:01 positives',
+  #                    breaks = c(seq(0, 1, by = .25), v_lines[, ds])) +
+  scale_x_continuous(name = 'Fractional decrease YR in A*02:01-positives') +
+  scale_y_continuous(name = expression(paste('Uncorrected ', italic(P), '-value')),
+                     trans = 'sqrt', breaks = c(.005, .01, .05, seq(0, 1, by = .25)))
+
+p2 <- ggplot(p_dat[project %nin% c('UCEC')], 
+             aes(x = ds, y = diffs, colour = project)) + 
+  geom_line() +
+  # geom_label_repel(data = v_lines, 
+  #                  aes(label = label, fill = project), 
+  #                  fontface = 'bold', colour = 'white', show.guide = F, 
+  #                  segment.colour = 'grey50', alpha = 1, size = 3) +
+  theme_fas(legend.position = 'none') +
+  scale_x_continuous(name = 'Fractional decrease YR in A*02:01-positives') +
+  scale_y_continuous(name = 'Ratio difference in YR between A*02:01-positives and negatives')
+
+print(p1)
+print(p2)
+p2 <- p1 + aes_string('y' = 'p')
+p2 <- p1 + aes_string('y' = 'diffs')
+print(p2)
+```
+
+```{r, include = F, warning=FALSE, echo=FALSE}
+## Compute Tukey's lower and upper hinges and the median
+donor_summary[!is.na(hla_a0201_status) & 
+              hla_a0201_status %in% a02_positive_types, 
+              fivenum(N_neos / N_nonsyn, na.rm = T)]
+## Compute summary stats for control population
+sum_stats <- donor_summary[!is.na(hla_a0201_status) & 
+                           hla_a0201_status %nin% a02_positive_types, 
+                           fivenum(N_neos / N_nonsyn, na.rm = T)]
+d.noise <- (sum_stats[3] - sum_stats[2]) / sum_stats[3]
+```
+
+One can intuit and object that using a methodology as outlined above, only large
+deviations from expected yield rates can be observed.  Indeed, the detection
+sensitivity positively depends on the percentage of mutations that is predicted
+to be antigen yielding of the total mutational load and the magnitude of antigen
+loss (i.e.  the percentage decrease in binding peptide yielding mutations).
+Formally, starting out with a $YR$ of $\frac{B}{N + B}$, where $B$ are peptide
+yielding mutations and $N$ are not peptide yielding, a fraction decrease $d$ in
+peptide yielding mutations will decrease the $YR$ by less than $d$ to a new $YR$
+of $\frac{B}{\frac{N}{1-d} + B}$ (illustrated below).  Thus, small values of $d$
+will not be readily picked up in case $N$ is either very small or very large as
+compared to $B$.  Using our prediction pipeline in its optimally predicting
+configuration (i.e. maximal $F1$-score, REF methodology) for the HLA-A\*02:01
+allele, we observe $YR$-values centered around .07 for samples derived from
+A\*02:01-negative patients (Figure 2a), who can be readily appreciated to have
+experienced no immune pressure against predicted epitopes.  In this low
+$YR$-regime and in absence of $YR$-variation between donors, even weak immune
+pressure (small values of $d$) would have been readily detected as compared to
+the reference yield rate distributions observed in A\*02:01 and A\*02:01-like
+negative donors (Fig S1, inset). Hence, it is unlikely that $d$ surpasses .02,
+the inter-quartile range of the observed yield rate distributions, below which
+it is not detectable as it's obfuscated by prediction variance. 
+
+$$
+d_{noise} = LH(A*02) / median (A*02)
+$$
+
+```{r, fig.caption = 'test', htmlcap = "Decrease in YR after indicated decrease in peptide yielding mutations", fig.width = 6, fig.height = 4}
+devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
+
+my_grid <- as.data.table(expand.grid(B=1:10, N=10:500, 
+                                     d=seq(0, .5, by=.25)))
+## Percentage change in YR, I currently don't understand nor care about this
+PCYR <- function(B, N, d) {
+  100 * ((B/N + 1) / (B/N + (1/(1-d))) - 1)
+}
+## New YR after d decrease in binding mutations
+NEWYR <- function(B, N, d) {
+  B / (N / (1 - d) + B)
+}
+YR <- function(B, N, d) {
+  B / (N + B)
+}
+frac_d_observable <- function(B, N, d) {
+  ((NEWYR(B, N, d) - YR(B, N, d)) / YR(B, N, d)) / -d
+}
+# frac_d_observable(10, 10, .2)
+# frac_d_observable(10, 30, .2)
+# frac_d_observable(30, 10, .2)
+# NEWYR(10, 10, .2)
+# YR(10, 10, .2)
+
+invisible(my_grid[, 'z' := PCYR(B, N, d)])
+invisible(my_grid[, 'YR' := (B / (N + B))])
+invisible(my_grid[, 'YR_new' := NEWYR(B, N, d)])
+invisible(my_grid[, 'frac_d_observable' := frac_d_observable(B, N, d)])
+invisible(my_grid[, 'A' := N + B])
+invisible(my_grid[, d := as.factor(d)])
+# print(my_grid[YR == .5])
+```
+
+```{r, warning=FALSE, echo=FALSE}
+p1 <- ggplot(my_grid, aes(x = YR, y = frac_d_observable, colour = d, group = d))
+p1 <- p1 + geom_point(size = .5)
+p1 <- p1 + geom_line()
+p1 <- p1 + theme_fas(aspect.ratio = 1)
+# p1 <- p1 + scale_colour_discrete(name = 'Percentage decrease\nin binders')
+p1 <- p1 + scale_colour_hue(name = expression(paste('Decrease ', italic(d), ' in binders')),
+                            h=c(90, 0))
+p1 <- p1 + scale_x_continuous(expand = c(0,0), 
+                              name = expression(paste('Yield rate prior to immune pressure ', 
+                                                      frac(italic(B), italic(B + N)))))
+p1 <- p1 + scale_y_continuous(expand = c(0,0), 
+                              name = expression(paste('Decrease in YR compared to decrease in binders')))
+# p1 <- p1 + geom_abline(slope = 1, intercept = 0, alpha = .5, size = 1.5,
+#                        linetype = 2, colour = 'gray60')
+# print(p1)
+# p1 <- p1 + scale_y_continuous(expand = c(0,0), name = sprintf("Yield rate difference / loss of binders\nupon %s percent decrease in binding mutations", 100 * d))
+```	
+
+```{r, warning=FALSE, echo=FALSE}
+p2 <- ggplot(my_grid, aes(x = YR, y = YR_new, colour = d, group = d))
+p2 <- p2 + geom_point(size = .5)
+p2 <- p2 + geom_line()
+p2 <- p2 + theme_fas(aspect.ratio = 1)
+# p2 <- p2 + scale_colour_discrete(name = "Percentage decrease\nin binders")
+p2 <- p2 + scale_colour_hue(name = expression(paste("Decrease ", italic(d), " in binders")),
+                            h=c(90, 0))
+p2 <- p2 + scale_x_continuous(expand = c(0,0), 
+                              name = expression(paste("Yield rate prior to immune pressure ", 
+                                                      frac(italic(B), italic(B + N)))))
+p2 <- p2 + scale_y_continuous(expand = c(0,0), 
+                              name = expression(paste("Yield rate after immune pressure ", 
+                                                      frac(italic(B), italic(B) + frac(italic(N), 1 - italic(d))))))
+# p2 <- p2 + geom_abline(slope = 1, intercept = 0, alpha = .5, size = 1.5,
+#                        linetype = 2, colour = 'gray60')
+# print(p2)
+# p1 <- p1 + scale_y_continuous(expand = c(0,0), name = sprintf("Yield rate difference / loss of binders\nupon %s percent decrease in binding mutations", 100 * d))
+
+plot_panel(list(p1 + theme(legend.position = 'none'), p2), 
+           normalize_grob_widths = F)
+# plot_panel(list(p1, p1 + coord_cartesian(xlim = c(0, .1), ylim = c(0, .1))))
+```
+
+
+```{r, eval = F, warning=FALSE, echo=FALSE}
+p1 <- ggplot(my_grid, aes(x = YR, y = -z, colour = d, group = d))
+p1 <- p1 + geom_point()
+p1 <- p1 + geom_line()
+p1 <- p1 + scale_colour_discrete(name = "Percentage decrease\nin binders")
+p1 <- p1 + scale_x_continuous(expand = c(0,0), name = "Percentage binders prior\nto immune pressure")
+p1 <- p1 + scale_y_continuous(expand = c(0,0), name = "Percentage decrease in YR")
+# p1 <- p1 + scale_y_continuous(expand = c(0,0), name = sprintf("Yield rate difference / loss of binders\nupon %s percent decrease in binding mutations", 100 * d))
+p1 <- p1 + theme_fas(base_size = 12)
+for (l in my_grid[, as.numeric(levels(d))]) {
+  p1 <- p1 + geom_hline(yintercept = l, alpha = .3, linetype = 'dashed')
+}
+print(p1)
+```
+
+```{r, eval = F, htmlcap = "", neo_mut_load_relationship_other}
+# reload_all()
+breaks       <- c(seq(0, 10, by = 10) %o% 10^c(0, 1, 2, 3))
+minor_breaks <- c(seq(0, 10, by = 1)  %o% 10^c(0, 1, 2, 3))
+p1 <- ggplot(donor_summary[!is.na(hla_a0201_status)], 
+             aes(N_nonsyn, N_neos, color = hla_a0201_status))
+p1 <- p1 + geom_point(alpha = .2)
+p1 <- p1 + scale_x_log10(name = '# Non-synonymous mutations',
+                         breaks = breaks, minor_breaks = minor_breaks)
+# p1 <- p1 + scale_x_continuous(name = '# Non-synonymous mutations',
+#                          breaks = breaks, minor_breaks = minor_breaks)
+p1 <- p1 + scale_y_log10(name = '# Predicted neo-epitopes',
+                         breaks = breaks, minor_breaks = minor_breaks)
+# p1 <- p1 + scale_y_continuous(name = '# Predicted neo-epitopes',
+#                          breaks = breaks, minor_breaks = minor_breaks)
+p1 <- p1 + theme_fas(base_size = 12)
+# p1 <- p1 + theme_bw(base_size = 16)
+# p1 <- p1 + scale_colour_discrete(name = 'HLA-A*02:01', labels = c('neg', 'pos'))
+p1 <- p1 + guides(colour = guide_legend(override.aes = list(alpha = 1)))
+# p1 <- p1 + facet_wrap(~project)
+# p1 <- p1 + geom_smooth(mapping = aes(color = NULL))
+# p1 <- p1 + geom_smooth()
+p1 <- p1 + geom_smooth(method = 'glm')
+# p1 <- p1 + scale_colour_gradient2(low = 'red', high = 'blue')
+# p1 <- p1 + scale_colour_gradient2(space = 'lab')
+print(p1)
+# w_ggsave('no_immune_editing_scatter.png', h = 4.5)
+# ggsave(file.path(imgFolder, 'mut_neo_relationship.png'),
+#        height = W, width = 1.66 * W)
+
+# p2 <- p1 + facet_grid(~ indel_class) + theme(legend.position = 'none')
+# grid.arrange(p1, p2)
+```
+
+```{r, htmlcap = "Neoantigen yield rates (YR) for the different projects on square root transformed scale.", eval = F, neo_mut_load_relationship_rates}
+p1 <- plot_yield_rates_by_project(donor_summary)
+print(p1)
+# w_ggsave('yield_rates')
+```
+
+These data are in disagreement with the work of Rooney et al. (2015), in which a
+strong immune editing signal was reported for treatment naive colon and kidney
+clear cell cancers. This discrepancy can be explained by differences falling
+into two categories: i) neo-antigen prediction differences and ii) immune
+editing analysis differences. With regard to i), in their immune editing
+analysis, Rooney et al.  (2015) predict neo-epitopes for patient matched HLA
+alleles using affinity predictions at affinity-thresholds of 500 nM using
+netMHCpan for all HLA-alleles. We used our complete prediction pipeline
+(affinity, RNA expression, proteasomal processing and STS) and restricted
+ourselves to HLA-A\*02:01, distinguishing between A\*02:01 positive and
+A\*02:01/A\*02:01-like negative tumor samples. From our benchmarks (Fig 1), we
+predict the precision of Rooney's pipeline to be ~20\% at maximum for the
+A\*02:01 allele and expect it to be lower for other HLA-alleles due to known
+differences in prediction accuracy between alleles in which predictions for the
+A\*02:01-allele are best (REF NetMHCpan). - and potentially incur a variable prediction performance between
+    samples and HLA alleles -  With regard to ii), In contrast, we
+benchmarked our prediction precision to be ~50% for the A\*02:01 allele. The
+expected difference in the amount of false positive predictions between our
+analyses is likely to solely explain the discrepancy. To investigate whether
+the discrepancy could additionally stem from the different analysis strategy, 
+we imposed an adapted version of Rooney's strategy on our prediction results.
+
+
+```{r, eval = F, warning=FALSE, echo=FALSE}
+fit <- glm(c_muts.all_missense/i_muts.all_missense ~
+           (hla_a0201_status+project)^2
+           data = donor_summary)
+anova(fit, test = 'F')
+
+fit <- glm(c_muts.all_missense/i_muts.all_missense ~ hla_a0201_status,
+           data = donor_summary[project == 'OV'])
+anova(fit, test = 'F')
+```

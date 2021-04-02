@@ -1,0 +1,272 @@
+```{r, warning=FALSE}
+source(file.path('~/antigenic_space', 'maarten-analyses',
+    'immune_editing', 'continuous_IE_detection_init.R'))
+
+dtf <- compile_all_coef_overview(
+  redo = T,
+  redo_subanalyses = T,
+  # ncores = 1,
+  ncores = 36,
+  reg_method = 'rlm',
+  # reg_method = 'bayesian_biased',
+  # reg_method = 'bayesian_unbiased',
+  include_non_ds_tallies = T,
+  z_normalize = F
+)
+
+# filter_bayesian_coef_overview(dtf, plot_fishtails = 'project')
+# dtf <- filter_bayesian_coef_overview(dtf)
+```
+
+```{r, warning=FALSE}
+source(file.path('~/antigenic_space', 'maarten-analyses',
+    'immune_editing', 'continuous_IE_detection_init.R'))
+# dtf[, hist(-log10(p_val_intercept), breaks = 500)]
+
+dtf_f <- filter_coef_overview(
+  dtf = dtf,
+  intercept_filter_p_val = .05,
+  # intercept_filter_magnitude = 1e-16,
+  intercept_filter_magnitude = NULL,
+  # rc_filter_magnitude = 1,
+  rc_filter_magnitude = NULL,
+  scale_filter = .01
+)
+```
+
+```{r, warning=FALSE}
+# dtf <- dtf[p_val_intercept <= 0.05]
+dtf[, mean(p_val_intercept <= 0.05, na.rm = T)]
+dtf[, summary(intercept)]
+ep <- .001
+qplot(dtf[, intercept], bins = 1000) +
+  # scale_y_continuous(trans = 'log10') +
+  scale_y_continuous() +
+  scale_x_continuous(limits = quantile(dtf[, intercept], c(ep, 1-ep)))
+qplot(data = dtf, x = intercept, y = rc, geom = 'hex', bins = 100) +
+  scale_x_continuous(limits = quantile(dtf[, intercept], c(ep, 1-ep))) +
+  geom_smooth() +
+  scale_fill_viridis_c()
+```
+
+```{r, warning=FALSE}
+print_overview_stats(dtf, 'before any filtering')
+dtf <- dtf[p_val_intercept <= 0.05]
+print_overview_stats(dtf, 'after enforcing strong intercept')
+dtf <- dtf[intercept > 0]
+print_overview_stats(dtf, 'after enforcing strong intercept')
+
+# dtf <- subset_project(dtf = dtf, project_extended = 'Breast~LumB',
+#   pan_can_includes_all = FALSE)
+# dtf <- subset_project(dtf = dtf, project_extended = 'Pan*\'-\'*cancer',
+#   pan_can_includes_all = FALSE)
+
+po <- dtf[, median(yr_fractional_change), by = project_extended] %>%
+  .[order(V1), project_extended]
+dtf[, project_extended := factor(project_extended, levels = po)]
+p <- ggplot(dtf, aes(x = yr_fractional_change)) +
+  geom_histogram() +
+  scale_x_continuous(limits = c(0.75, 1.25)) +
+  facet_wrap(~project_extended, labeller = label_parsed) +
+  theme_fas()
+ggsave(file.path(img_loc, 'rlm_yr_frac_change_overview.png'), p)
+
+ep <- .5
+p <- ggplot(dtf, aes(x = yr_fractional_change, y = -log10(p_val))) +
+  geom_vline(xintercept = 1, colour = 'grey20', lty = 3) +
+  geom_hex(bins = 100) +
+  scale_x_continuous(limits = c(1-ep, 1+ep)) +
+  scale_y_continuous(limits = c(0, 5)) +
+  facet_wrap(~project_extended, labeller = label_parsed) +
+  theme_fas()
+ggsave(file.path(img_loc, 'rlm_yr_frac_change_vs_p.png'), p)
+
+p <- ggplot(dtf[p_val <= 0.05], aes(x = yr_fractional_change)) +
+  geom_histogram() +
+  scale_x_continuous(limits = c(0.75, 1.25)) +
+  facet_wrap(~project_extended, labeller = label_parsed) +
+  theme_fas()
+ggsave(file.path(img_loc, 'rlm_yr_frac_change_overview_sig_p.png'), p)
+```
+
+# Systematic comparison between frequentist and Bayesian estimation
+
+```{r, warning=FALSE}
+source(file.path('~/antigenic_space', 'maarten-analyses', 
+    'immune_editing', 'continuous_IE_detection_init.R'))
+ncores = 32
+redo = F
+
+nonZ_rlm_dtf <- compile_all_coef_overview(
+  redo = redo,
+  ncores = ncores,
+  reg_method = 'rlm',
+  include_non_ds_tallies = T,
+  z_normalize = F
+)
+
+Z_rlm_dtf <- compile_all_coef_overview(
+  redo = redo,
+  ncores = ncores,
+  # reg_method = 'rlm',
+  reg_method = 'rlm',
+  include_non_ds_tallies = T,
+  z_normalize = T
+)
+
+bayesian_g_dtf <- compile_all_coef_overview(
+  redo = redo,
+  ncores = ncores,
+  reg_method = 'bayesian_biased',
+  include_non_ds_tallies = T,
+  z_normalize = F
+)
+
+id_vars <- c('overlap_var', 'patient_inclusion_crit', 'LOH_HLA',
+  'analysis_name', 'focus_allele', 'project_extended', 'analysis_idx')
+merged <- merge(nonZ_rlm_dtf, Z_rlm_dtf, by = id_vars)
+merged[, all(opt_string.x == opt_string.y)]
+merged[, opt_string.x := NULL]
+merged[, opt_string.y := NULL]
+merged <- merge(merged, bayesian_g_dtf, by = id_vars)
+if (F) {
+  merged <- merged %>%
+    dplyr::filter(sampling_convergence == T) %>%
+    dplyr::filter(est_error <= .25) %>%
+    { . }
+}
+
+setnames(merged, 'rc.x', 'rc')
+setnames(merged, 'rc.y', 'Z_rc')
+setnames(merged, 'ol_estimate', 'B_rc')
+setnames(merged, 'intercept.x', 'intercept')
+setnames(merged, 'intercept.y', 'Z_intercept')
+setnames(merged, 'intercept_estimate', 'B_intercept')
+setnames(merged, 'yr_fractional_change.x', 'D')
+setnames(merged, 'yr_fractional_change.y', 'Z_D')
+setnames(merged, 'yr_fractional_change', 'B_D')
+```
+
+Comparison Bayesian biased rc (B_rc) and RLM rc shows that B_rc is slightly more
+negative on average, more strongly indicating editing (direct comparison of
+these is non-sensical, they should be normalized to their intercepts first).
+Both variables are biased towards negativity though.
+
+
+```{r, warning=FALSE}
+print_plot({
+  merged %>%
+    select(rc, B_rc, Z_rc, intercept, B_intercept, Z_intercept) %>%
+    GGally::ggpairs(
+      lower = list(continuous = lower_hex),
+      diag = list(continuous = diag_hist)
+    ) + theme_classic()
+  }, w = 20, h = 20,
+  fn = file.path(img_loc, 'ggpairs_rlm_bayes_coef_comparison.png'))
+```
+
+```{r, warning=FALSE}
+print_plot({
+  merged %>%
+    dplyr::filter(sampling_convergence == T) %>%
+    dplyr::filter(est_error <= .25) %>%
+    select(D, B_D, Z_rc) %>%
+    GGally::ggpairs(
+      lower = list(continuous = lower_hex),
+      diag = list(continuous = diag_hist)
+    ) + theme_classic()
+  }, w = 12, h = 12,
+  fn = file.path(img_loc, 'ggpairs_rlm_bayes_D_comparison2.png'))
+```
+
+```{r, warning=FALSE}
+p_dat[sign(Z_rc) != sign(rc)]
+p_dat[sign(B_rc) != sign(rc)]
+p_dat[, 'bias' := c('> 1', '< 1')[as.integer(rc > Z_rc) + 1]]
+p_dat[rc == Z_rc, bias := '']
+p_dat[, .N, bias]
+p_dat[, .N, .(sign(Z_intercept), bias)]
+```
+
+```{r, warning=FALSE}
+merged[, .N, keyby = .(B_D < 0, Z_rc < 0)]
+merged[, summary(B_D)]
+p_Z_merged <- pick_representative_allele(merged, sort_var = 'Z_rc')
+p_Z_merged[, summary(B_D)]
+p_Z_merged[, summary(Z_rc)]
+
+merged[, summary(Z_rc)]
+Z_rlm_dtf[, summary(rc)]
+```
+
+# Systematic comparison starting from either RLM or Bayesian selected sub-analyses
+
+```{r, warning=FALSE}
+source(file.path('~/antigenic_space', 'maarten-analyses', 
+    'immune_editing', 'continuous_IE_detection_init.R'))
+ncores = 32
+redo = F
+
+nonZ_rlm_dtf <- 
+  compile_all_coef_overview(
+    redo = redo,
+    ncores = ncores,
+    reg_method = 'rlm',
+    include_non_ds_tallies = T,
+    z_normalize = F
+  ) %>%
+  filter_coef_overview(
+    intercept_filter_p_val = .05,
+    intercept_filter_magnitude = 1e-16,
+    # intercept_filter_magnitude = NULL,
+    # rc_filter_magnitude = 1,
+    # rc_filter_magnitude = NULL,
+    scale_filter = .03
+  )
+
+bayesian_g_dtf <- compile_all_coef_overview(
+  redo = redo,
+  ncores = ncores,
+  reg_method = 'bayesian_biased',
+  include_non_ds_tallies = T,
+  z_normalize = F
+) %>% format_coef_overview(
+  # plot_fishtails = 'project',
+  plot_fishtails = NULL,
+  filter_intercept = F,
+  intercept_filter_error = 2,
+  # rc_filter_error = 4,
+  delta_filter_error = NULL
+)
+
+id_vars <- c('overlap_var', 'patient_inclusion_crit', 'LOH_HLA',
+  'analysis_name', 'focus_allele', 'project_extended', 'analysis_idx')
+merged <- merge(nonZ_rlm_dtf, bayesian_g_dtf, by = id_vars)
+stopifnot(merged[, all(opt_string.x == opt_string.y)])
+# merged[, .(n_patients.x, n_patients.y)]
+stopifnot(merged[!is.na(n_patients.y), 
+  all(n_patients.x == n_patients.y)])
+merged[, opt_string.x := NULL]
+merged[, opt_string.y := NULL]
+
+setnames(merged, 'intercept.x', 'intercept', skip_absent = T)
+setnames(merged, 'rc.x', 'rc', skip_absent = T)
+setnames(merged, 'ol_estimate', 'B_rc')
+setnames(merged, 'intercept_estimate', 'B_intercept')
+setnames(merged, 'yr_fractional_change.x', 'D')
+setnames(merged, 'yr_fractional_change.y', 'B_D')
+
+print_plot({
+  merged %>%
+    select(rc, B_rc, intercept, B_intercept, D, B_D) %>%
+    GGally::ggpairs(
+      lower = list(continuous = lower_hex),
+      diag = list(continuous = diag_hist)
+    ) + theme_classic()
+  }, w = 20, h = 20,
+  fn = file.path(img_loc, 'ggpairs-rlm_selected\\
+    -rlm_bayes_coef_comparison.png'))
+```
+
+```{r, warning=FALSE}
+```

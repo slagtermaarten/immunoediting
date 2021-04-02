@@ -1,0 +1,882 @@
+---
+title: "Immune editing figures"
+author: "Maarten"
+output:
+  html_document:
+    theme: cerulean
+    toc: yes
+---
+
+<!-- {{{ Preamble -->
+
+```{r, output = F, messages = F, include = F, cache = F}
+knitr::opts_chunk$set(message = FALSE,
+                      warning = FALSE,
+                      echo = FALSE,
+                      error = FALSE,
+                      include = T,
+                      cache = T,
+                      cache.rebuild = F,
+                      cache.lazy = T,
+                      cache.comments = F,
+                      autodep = T,
+                      cache = T,
+                      fig.width = 16/2.54,
+                      fig.height = 9/2.54)
+knitr::opts_knit$set(progress = TRUE, verbose = TRUE)
+if (F) {
+  source(file.path('~/antigenic_space', 'bin', 'install_packages.R'))
+}
+# devtools::load_all(file.path('~/libs', 'maartenutils'))
+devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
+library(data.table)
+library(dtplyr)
+library(ggplot2)
+# source(file.path(ma_dir, 'immune_editing', 'immune_editing_analyses.R'))
+# head(marty_tally)
+# testenv <- new.env(parent = emptyenv())
+# testenv[['testvar']] <- 3
+# attach(testenv)
+# testenv[['testvars']] <- 4
+```
+<!-- }}} Preamble -->
+
+# Fig 2 Absence of immune editing
+
+Neo-antigen yield rate analyses, with and without restricting the control set of
+A2-negative patients to include only patients of whom zero A2 predicted peptides
+are presented by other alleles.  Below, the former will be referred to as the
+strict control set, the latter as the lenient control set.  Using more strict
+control sets, entire tumor types can be lost, as the control set can get reduced
+1 or 0.
+Uncorrected two-sided *p*-values below .05 are indicated per tumor type.  In
+general, whenever an analysis shows significant results, it is at both ends of
+the testing spectrum, lowering the credibility of immune editing in the projects
+in which the A2 yield rate is significantly lower.
+
+
+The Restifo lab has identified genes whose presence is required for T-cell
+sensitivity through CRISPR genetic screening.  491/5630 HLA typed patients (9%)
+and 430/4972 (9%) of patients under analysis with the lenient control were found
+to have a mutation in one of the genes identified as essential to immunotherapy
+(JAK1, STAT1, TAP1, COL17A1, CD58, HLA-A, TAPBP, TAF3, SRP54, B2M, RPL23,
+SOX10). As these patients escape immune pressure via some other mechanism,
+pressure to lose antigenic mutations can be expected to be lower and the signal
+for immune editing to be weaker. We exclude those patients from the analyses
+when indicated by the sub headings above the analysis.  The variant calls for
+the HLA locus are likely to be incomplete for a lot of TCGA projects. Shukla et
+al., have published a list of variants they have identified in these patients.
+This still needs to be parsed in order to increase this list.
+
+<!--
+Uncorrected one-sided *p*-values below .05 are indicated per tumor type.
+Significant *p*-values for the top ranked tumor types suggest the alternative
+hypothesis (yield rate(s) in A2-like negative patients are lower than in
+A2-positive patients) to be true, consistent with immune editing.  The tumor
+types ranked in the bottom of the plots show higher yield rates in A2-positive
+patients. Here the one-sided test is performed with the opposite alternative
+hypothesis (A2-positives significantly higher yield rates than A2-negatives).
+These give an estimate of the degree to which we can expect false positive
+results with the sensical alternative hypothesis.
+!-->
+
+<!--
+Perhaps nonsensical, as I cannot imagine a biological scenario in which
+A2-negatives would have a higher yield rate - at least not for passenger
+mutations -, but t
+!-->
+
+## Mutation set 1 - SNVs only
+
+### No filtering for essential genes for immunotherapy
+
+```{r, warning=FALSE, echo=FALSE, fig.width = 16/2.54, height = 9/2.54}
+devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
+devtools::load_all(file.path('~/libs', 'maartenutils'))
+# source('~/antigenic_space/bin/install_packages.R')
+# panA_ns <- plot_mutational_load_dist(snv_tally, other_allele_coverage_thresh = 0,
+                                     # by_var_ordering = levels(panA$data[[by_var]]))
+plot_IE_yr_panel(snv_tally,
+                 y_val = 'c_muts.snv / i_muts.snv',
+                 other_allele_coverage_thresh = NULL)
+plot_IE_yr_panel(snv_tally,
+                 y_val = 'c_muts.snv / i_muts.snv',
+                 other_allele_coverage_thresh = 0)
+```
+
+Super patient versions of the same yield rate comparisons are on the right sides
+wof the panels. Lodewyk asked for these, worried about the possibility of
+low mutations amount leading to excessively noisy yield rate estimates. Grosso
+modo, the results appear highly similar to the individual yield rate analyses,
+although *p*-value orderings differ somewhat
+
+
+```{r, eval = F, warning=FALSE, echo=FALSE}
+unique(wc_test, by = 'proj_count_string')[order(logFC)]
+wc_test[grepl('Breast|Pros', proj_count_string)][order(logFC)]
+```
+
+```{r, eval = F, warning=FALSE, echo=FALSE}
+wc_test_pan <- perform_wc_test(snv_tally, test_mode = 'superpatient',
+                               y_val = 'c_muts.snv / i_muts.snv',
+                               other_allele_coverage_thresh = NULL,
+                               by_var = NULL)
+knitr::kable(wc_test_pan)
+```
+
+### Essential genes for immunotherapy (Restifo lab) filtered out
+
+```{r, warning=FALSE, echo=FALSE}
+plot_IE_yr_panel(snv_tally,
+              y_val = 'c_muts.snv / i_muts.snv',
+              filter_essentiality = T,
+              other_allele_coverage_thresh = NULL)
+plot_IE_yr_panel(snv_tally,
+              y_val = 'c_muts.snv / i_muts.snv',
+              filter_essentiality = T,
+              other_allele_coverage_thresh = 0)
+```
+
+```{r, eval = F, warning=FALSE, echo=FALSE}
+wc_test_pan <- perform_wc_test(snv_tally, test_mode = 'superpatient',
+                               y_val = 'c_muts.snv / i_muts.snv',
+                               filter_essentiality = T,
+                               other_allele_coverage_thresh = NULL,
+                               by_var = NULL)
+knitr::kable(wc_test_pan)
+```
+
+## Mutation set 2
+
+Excluding mutations that confer a fitness advantage, are essential or are
+subclonal, in addition to restricting to SNVs.  Lenient and strict control sets.
+
+### No filtering for essential genes for immunotherapy
+
+
+```{r, warning=FALSE, echo=FALSE}
+plot_IE_yr_panel(nofa_tally,
+              y_val = 'c_muts.nofa / i_muts.nofa',
+              filter_essentiality = F,
+              other_allele_coverage_thresh = NULL)
+plot_IE_yr_panel(nofa_tally,
+              y_val = 'c_muts.nofa / i_muts.nofa',
+              filter_essentiality = F,
+              other_allele_coverage_thresh = 0)
+```
+
+
+### Essential genes for immunotherapy (Restifo lab) filtered out
+
+```{r, warning=FALSE, echo=FALSE}
+plot_IE_yr_panel(nofa_tally,
+              y_val = 'c_muts.nofa / i_muts.nofa',
+              filter_essentiality = T,
+              other_allele_coverage_thresh = NULL)
+plot_IE_yr_panel(nofa_tally,
+              y_val = 'c_muts.nofa / i_muts.nofa',
+              filter_essentiality = T,
+              other_allele_coverage_thresh = 0)
+```
+
+
+## Mutation set 3
+
+Inspired by Marty et al., 2017, filtering down to SNVs in driver genes, not
+necessarily recurrent ones. We use the cancer specific IntOGen definitions of
+driver genes here.
+
+### No filtering for essential genes for immunotherapy
+
+```{r, warning=FALSE, echo=FALSE}
+# devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
+# suppressWarnings(rm(driv_tally))
+# w_readRDS('driv_tally')
+# driv_tally[is.na(c_muts.driv) | is.na(c_muts.driv), .N]
+# driv_tally <- filter_by_hla(driv_tally)
+# driv_tally[, .N, by = c('hla_a0201_status_b',
+#                         'project_extended')][order(project_extended)]
+# driv_tally[, length(table(hla_a0201_status_b)), by = project_extended]
+# debugonce(plot_yield_rates_by_project)
+devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
+plot_IE_yr_panel(driv_tally,
+              y_val = 'c_muts.driv / i_muts.driv',
+              filter_essentiality = F,
+              other_allele_coverage_thresh = NULL)
+plot_IE_yr_panel(driv_tally,
+              y_val = 'c_muts.driv / i_muts.driv',
+              filter_essentiality = F,
+              other_allele_coverage_thresh = 0)
+```
+
+### Essential genes for immunotherapy (Restifo lab) filtered out
+
+```{r, warning=FALSE, echo=FALSE}
+devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
+plot_IE_yr_panel(driv_tally,
+              y_val = 'c_muts.driv / i_muts.driv',
+              filter_essentiality = T,
+              other_allele_coverage_thresh = NULL)
+plot_IE_yr_panel(driv_tally,
+              y_val = 'c_muts.driv / i_muts.driv',
+              filter_essentiality = T,
+              other_allele_coverage_thresh = 0)
+```
+
+## Mutation set 4
+
+A more direct version inspired by Marty et al. (2017), in which we restrict our
+mutation set to recurrent SNVs in driver genes (as identified by Marty et al.).
+These recurrent mutations were reported to have lower MHC-presentability than
+passenger mutations.  From this, we would expect lower yield rates especially
+for these mutations in A2-positive patients. No significant results are observed
+however.  Lenient and strict control sets.
+
+### No filtering for essential genes for immunotherapy
+
+```{r, eval = F, warning=FALSE, echo=FALSE}
+devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
+w_readRDS('marty_tally')
+marty_IE <- plot_IE_yr_panel(marty_tally,
+              y_val = 'c_muts.marty / i_muts.marty',
+              filter_essentiality = F,
+              other_allele_coverage_thresh = NULL)
+saveRDS(marty_IE, file = file.path(img_loc, 'marty_IE.grob.rds'))
+```
+
+```{r, warning=FALSE, echo=FALSE}
+plot_IE_yr_panel(marty_tally,
+              y_val = 'c_muts.marty / i_muts.marty',
+              filter_essentiality = F,
+              other_allele_coverage_thresh = NULL)
+plot_IE_yr_panel(marty_tally,
+              y_val = 'c_muts.marty / i_muts.marty',
+              filter_essentiality = F,
+              other_allele_coverage_thresh = 0)
+```
+
+### Essential genes for immunotherapy (Restifo lab) filtered out
+
+```{r, warning=FALSE, echo=FALSE}
+plot_IE_yr_panel(marty_tally,
+              y_val = 'c_muts.marty / i_muts.marty',
+              filter_essentiality = T,
+              other_allele_coverage_thresh = NULL)
+plot_IE_yr_panel(marty_tally,
+              y_val = 'c_muts.marty / i_muts.marty',
+              filter_essentiality = T,
+              other_allele_coverage_thresh = 0)
+```
+
+# Power analysis
+
+Given observed noise levels, how big would the effect have to be in order to be
+able to detect it?
+
+```{r, eval = F, warning=FALSE, echo=FALSE}
+if (F) {
+  p_dat <- gen_ext_proj_lab(donor_summary)
+  w_saveRDS('p_dat')
+}
+# In case of t-test, pan cancer level
+# qplot(data = p_dat) + aes_string(x = y_val) + geom_histogram() +
+#   scale_x_continuous(trans = 'log10')
+# p_dat[, shapiro.test(eval(parse(text=y_val)) + 1)$p.value,
+#       by = 'project_extended']
+# p_dat[, shapiro.test(sample(eval(parse(text = y_val)), size =  5000))]
+
+wc_test_pan <- perform_wc_test(p_dat, test_mode = 'superpatient',
+             y_val = 'c_muts.missense_mutation / i_muts.missense_mutation',
+             other_allele_coverage_thresh = NULL, by_var = NULL)
+# knitr::kable(wc_test_pan)
+# m1, m2: the sample means
+# s1, s2: the sample standard deviations
+# n1, n2: the same sizes
+# m0: the null value for the difference in means to be tested for. Default is 0.
+# equal.variance: whether or not to assume equal variance. Default is FALSE.
+t.test2 <- function(m1, m2, s1, s2, n1, n2, m0=0, equal.variance=FALSE)
+{
+    if (equal.variance==FALSE) {
+        se <- sqrt( (s1^2/n1) + (s2^2/n2) )
+        # welch-satterthwaite degrees of freedom
+        drf <- ( (s1^2/n1 + s2^2/n2)^2 ) /
+          ( (s1^2/n1)^2/(n1-1) + (s2^2/n2)^2/(n2-1) )
+    } else {
+        # pooled standard deviation, scaled by the sample sizes
+        se <- sqrt( (1/n1 + 1/n2) * ((n1-1)*s1^2 + (n2-1)*s2^2)/(n1+n2-2) )
+        drf <- n1+n2-2
+    }
+    t <- (m1-m2-m0)/se
+    dat <- list(m1-m2, se, t, 2*pt(-abs(t),drf))
+    names(dat) <- c("diff_means", "std_err", "t", "p_value")
+    return(dat)
+}
+
+test_diff <- function(fc = .5, PPV = .5) {
+  c('FC_diff' = fc, 'PPV' = PPV,
+    t.test2((1 - fc * PPV) * wc_test_pan[1, p], wc_test_pan[1, p],
+            wc_test_pan[1, SE], wc_test_pan[1, SE],
+            wc_test_pan[1, N], wc_test_pan[1, N]))
+}
+
+PPV_min = .1
+power_dat <- rbindlist(lapply(seq(PPV_min, 1, by = PPV_min), function(PPV) {
+  rbindlist(lapply(seq(0, 5e-4, by = 2e-5),
+                   function(fc) test_diff(fc = fc, PPV = PPV)))
+}) , fill = T)
+
+ggplot(power_dat, aes(x = 100 * FC_diff, y = p_value,
+                      color = as.factor(PPV), group = PPV)) +
+  geom_hline(yintercept = .05, type = 'dashed',
+             color = 'indianred2', alpha = .8) +
+  geom_point(size = .1) +
+  geom_line() +
+  theme_fas() +
+  theme(legend.position = c(.90, .90),
+        legend.justification = c(1, 1),
+        legend.box.just = 'center',
+        # legend.background = element_blank(),
+        legend.margin = margin(1, 1, 1, 1)) +
+  scale_colour_manual(name = 'Prediction precision',
+  values = maartenutils::gen_color_vector(n = power_dat[, uniqueN(PPV)])) +
+  scale_x_continuous(name = 'Percentage decrease in A2+ yield rate') +
+  scale_y_continuous(name = 'p-value (t-test)')
+
+```
+
+Tumor specific super patients are compared with two-sided chi-squared test for
+equal proportions, as used in all superpatient analyses.   The prediction
+precision (PPV) dictates the fraction of peptides which are expected to be true
+positives. Only these peptides are immunologically visible and hence targetable.
+The observable immune strength is defined to be the immune strength (0 for
+absence of editing, 1 for complete deletion of antigenic mutations) modulated by
+the prediction precision. It is a unitless quantity.  To estimate the required
+effect size for statistical significance, we first equalize the yield rates
+between A2-positives and negatives by multiplying the neo-load in the the
+A2-positives by a tumor-type specific correction factor. This step focuses the
+analysis away from pre-existing signs of editing (lower yield rates in
+A2-positives), towards an estimate that is purely dependent on sample size and
+the mean and variance of neo-antigen/mutational load. We then lower the yield
+rate in A2-positives by multiplying it by 1 minus the detectable immune pressure
+and test for statistical significane using a chi-squared test for equal
+proportions.
+
+
+```{r, wilcoxsim, warning=FALSE, echo=FALSE}
+# devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
+# p_dat <- gen_ext_proj_lab(donor_summary)
+
+#' Lower yield rate in HLA-pos and test for signficant loss in neo-antigen yield
+#' rate
+#'
+#' @param ppv, positive predictive value (a.k.a. precision) only true
+#' discoveries can be lost due to selective pressure exerted by the immune
+#' system
+#'
+#'
+simulate_editing <- function(dtf = merge_hla(p_dat),
+               hla_var = 'hla_a0201_status',
+               y_val =  'c_muts.missense_mutation / i_muts.missense_mutation',
+               ppv = .5,
+               immune_pressure = 1) {
+  ## Extract names of contributing and input variant types
+  indiv_vals <- get_y_vals(y_val)
+  ## Ensure we're only editing a local copy
+  dtf <- copy(dtf[, c('donor_id', 'project_extended', 'proj_count_string',
+											hla_var, indiv_vals), with = F])
+	dtf <- merge_hla(dtf)
+	# dtf[, table(get(hla_var))]
+  levs <- extract_hla_levs(dtf = dtf, hla_var)
+  # before_yr <- dtf[get(hla_var) %in% unlist(levs),
+  #                  mean(eval(parse(text = y_val)), na.rm = T), by = hla_var]
+	## Yield rates in test before normalising to control group
+  before <- dtf[get(hla_var) == levs[['test']], eval(parse(text = y_val))]
+  ## Determine superpatient yield rates, we don't actually need the p-values
+  wc_test <- perform_wc_test(dtf, hla_var = hla_var, y_val = y_val,
+                             test_mode = 'superpatient')
+	wc_test <- merge_project(wc_test, p_var = 'project_extended')
+
+  ## Compute correction factors required to equalize yield rates
+  CFs <- wc_test[, {
+    .('CF' = .SD[get(hla_var) == levs$ctrl, p] /
+             .SD[get(hla_var) == levs$test, p])
+  }, by = project_extended]
+  setkey(CFs, project_extended)
+
+  ## Equalize yield rates between test and control sets
+  ## Additionally, lower yield rate specifically in A2-pos by effective strength
+  effective_strength <- ppv * immune_pressure
+  for (project in CFs[, project_extended]) {
+    # message(length(intersect(dtf[, project_extended],
+	  # 												 CFs[, project_extended])))
+    # setdiff(dtf[, proj_count_string], CFs[, levels(proj_count_string)])
+		# dtf[, proj_count_string]
+		# dtf[project_extended == project]
+    # dtf[get(hla_var) == levs[['test']]]
+    dtf[get(hla_var) == levs[['test']] & project_extended == project,
+        (indiv_vals[1]) := (get(indiv_vals[1]) *
+				CFs[project_extended == project, CF] * (1 - effective_strength))]
+          # (effective_strength)]
+		# CFs[proj_count_string == project]
+  }
+  after <- dtf[get(hla_var) == levs[['test']], eval(parse(text = y_val))]
+  message('effective strength=', effective_strength,
+          ', ppv=', ppv, ', immune_pressure=', immune_pressure,
+          ', FC avg: ', mean(after/before, na.rm = T))
+
+	# debugonce(perform_wc_test)
+  wc_test <- perform_wc_test(dtf,
+                             test_mode = 'superpatient',
+                             y_val = y_val,
+                             other_allele_coverage_thresh = NULL)
+  return(wc_test)
+}
+# debugonce(simulate_editing)
+dtf <- simulate_editing(immune_pressure = 0, ppv = 1)
+```
+
+```{r, warning=FALSE, echo=FALSE}
+if (F) {
+  editing_analysis_dat <- rbindlist(plyr::alply(
+    expand.grid(ppv = seq(.1, .6, by = 1e-1),
+                immune_pressure = seq(0, 1, by = 1e-2)), 1,
+      function(r) {
+        res <- simulate_editing(dtf = p_dat,
+                         immune_pressure = r[['immune_pressure']],
+                         ppv = r[['ppv']])
+        cbind(res, immune_pressure = r[['immune_pressure']],
+              ppv = r[['ppv']])
+      }
+  ), fill = T)
+  # editing_analysis_dat <-
+  #   merge_project_counts(dtf = editing_analysis_dat, by_var = 'project_extended',
+	#												 count_dat = p_dat,
+	#												 count_proj_string = 'proj_count_string')
+	editing_analysis_dat[, 'project_extended' :=
+											 gsub('^(.*)~\\(.*)', '\\1', proj_count_string)]
+  editing_analysis_dat[, 'effective_strength' := immune_pressure * ppv]
+  # editing_analysis_dat <- unique(editing_analysis_dat,
+  #          by = c('proj_count_string', 'hla_a0201_status_b',
+  #                 'immune_pressure', 'ppv'))
+  w_saveRDS('editing_analysis_dat')
+} else {
+	cond_rm(editing_analysis_dat)
+  invisible(w_readRDS('editing_analysis_dat'))
+}
+```
+
+```{r, warning=FALSE, echo=FALSE}
+req_IE <- unique(editing_analysis_dat[ppv == .5],
+                 by = c('proj_count_string', 'immune_pressure', 'ppv'))
+req_IE <- req_IE[pval <= .05 & logFC < 0][,
+	.SD[which.max(pval)], by = c('proj_count_string')]
+req_IE[, hist(immune_pressure)]
+req_IE[order(immune_pressure)]
+req_IE[, print.mean_CI(immune_pressure)]
+tail(req_IE[order(immune_pressure)])
+```
+
+```{r, include = F, warning=FALSE, echo=FALSE}
+## Order projects by the amount of required pressure to be statistically
+## significant
+max_ps <- unique(editing_analysis_dat,
+                 by = c('project_extended', 'immune_pressure', 'ppv'))
+max_ps <- max_ps[pval <= .05 & logFC < 0][,
+	.SD[which.max(pval)], by = c('project_extended')]
+# max_ps <- max_ps[, .SD[which.max(pval)], by = c('project_extended')]
+max_ps[, c('immune_pressure', 'ppv') := list(NULL, NULL)]
+is_project_ordering <- max_ps[order(effective_strength)][,
+                                    as.character(project_extended)]
+is_project_ordering <- c(is_project_ordering,
+                    setdiff(editing_analysis_dat[, levels(project_extended)],
+                            max_ps[, project_extended]))
+editing_analysis_dat[, project_extended :=
+                         factor(as.character(project_extended),
+                                levels = is_project_ordering)]
+# editing_analysis_dat[, levels(project_extended)]
+```
+
+```{r, warning=FALSE, echo=FALSE, fig.width = 18/2.54, fig.height = 9/2.54}
+# devtools::load_all(file.path('~/libs', 'maartenutils'))
+# devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
+ppvs <- seq(.1, .6, .1)
+long_ps <- rbindlist(lapply(ppvs, function(x) {
+  res <- cbind(max_ps, ppv = x)
+}))
+invisible(long_ps[, 'immune_pressure' := round(effective_strength / ppv, 2)])
+long_ps <- clean_columns(instance = '', long_ps, 'symbol_idx')
+long_ps[, 'symbol_idx' := ((which(.SD[, unique(project_extended)] ==
+                                  is_project_ordering) - 1) %% 3),
+				by = project_extended]
+long_ps[, symbol_idx := factor(symbol_idx + 15)]
+
+# long_ps[, table(symbol_idx)]
+long_ps[, project_extended := factor(as.character(project_extended),
+                                levels = is_project_ordering)]
+
+# long_ps[, .N, by = c("symbol_idx", "project_extended")]
+
+color_levels <-
+	setNames(rev(maartenutils::gen_color_vector(name = 'Zissou1',
+																		 n = long_ps[, uniqueN(project_extended)])),
+					 editing_analysis_dat[, levels(project_extended)])
+# plot_palette(color_levels)
+
+shape_levels <-
+  unique(long_ps, by = 'project_extended') %>%
+  { .[, setNames(symbol_idx, project_extended)] }
+
+label_levels <-
+  lapply(names(shape_levels), function(lab) parse(text = as.character(lab)))
+
+p <- ggplot(long_ps, aes(y = immune_pressure, x = ppv,
+										# shape = as.factor(symbol_idx),
+										shape = project_extended,
+                    color = project_extended,
+										group = project_extended)) +
+  geom_line(show.legend = F) +
+  geom_vline(xintercept = .45,
+             color = 'black', alpha = .8, linetype = 'dashed') +
+	geom_point(size = 2) +
+	# geom_point(data = long_ps[symbol_idx == 15], shape = 19) +
+	# geom_point(data = long_ps[symbol_idx == 16], shape = 20) +
+	# geom_point(data = long_ps[symbol_idx == 17], shape = 21) +
+  theme_fas(# legend.position = 'right',
+            # legend.spacing = unit(0, 'mm'),
+            legend.key.size = unit(2, 'mm'),
+            legend.background = element_rect(fill = alpha('white', 0.95),
+                                             size = 2, color = 'black'),
+            legend.text = element_text(size = rel(0.6), 
+                                       margin = margin(l = 1, r = 8, unit = "pt")),
+            # legend.box.margin = margin(0, 0, 0, 0, unit = 'mm'),
+            # legend.margin = margin(0, 0, 0, 0, unit = 'mm'),
+            legend.justification = c(1, 1),
+            legend.position = c(0.99, 0.99),
+            legend.direction = 'vertical') +
+  scale_y_continuous(name = 'Fractional loss of HLA-A*02:01-epitopes\nrequired for statistical significance',
+                     breaks = c(0, 1, seq(.2, .8, .2)),
+                     labels = c('no editing - 0', 'complete editing - 1',
+                                seq(.2, .8, .2)),
+                     trans = 'identity',
+                     expand = c(0, 0)) +
+  scale_x_continuous(name = 'Prediction precision TP / (TP + FP)',
+										 expand = c(0, 0)) +
+  scale_colour_manual(name = '',
+                      values = color_levels,
+                      labels = label_levels) +
+  scale_shape_manual(name = '',
+                     values = plyr::mapvalues(as.numeric(shape_levels), 
+                                              from = c(1, 2, 3),
+                                              to = c(15, 6, 4)),
+                     labels = label_levels) +
+  coord_cartesian(ylim = c(0, 1), xlim = c(0.1, .6))
+
+maartenutils::w_ggsave(plot = p,
+                       fn = 'ie_power_analysis_by_precision',
+                       img_folder = grob_loc,
+                       filetypes = c('pdf', 'grob'),
+                       w=178, h=90, units = 'mm')
+```
+
+
+```{r, eval = F, warning=FALSE, echo=FALSE, fig.width = 21/2.54, fig.height=15/2.54}
+# devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
+plot_immune_editing_detection_sens <- function(dtf = editing_analysis_dat,
+                                               by_var = 'project_extended') {
+  p <- ggplot(unique(dtf,
+                by = c('project_extended', 'immune_pressure', 'ppv')),
+              aes(x = immune_pressure, y = pval,
+                  color = as.factor(ppv), group = ppv)) +
+    geom_hline(yintercept = .05, type = 'dashed',
+               color = 'indianred2', alpha = .8) +
+    geom_point(size = .1) +
+    geom_line() +
+    theme_fas() +
+    theme(
+          # legend.position = c(.90, .90),
+          # legend.justification = c(1, 1),
+          legend.box.just = 'center',
+          # legend.background = element_blank(),
+          legend.margin = margin(1, 1, 1, 1)) +
+    scale_colour_manual(name = 'Prediction precision',
+    values = maartenutils::gen_color_vector(prims = NA,
+                                            name = 'Zissou1',
+                    n = editing_analysis_dat[, uniqueN(ppv)])) +
+    scale_x_continuous(name = 'Fraction epitopes lost due to CD8 pressure') +
+    scale_y_continuous(name = expression(italic(p)-value~(chi^2-test)))
+
+  if (by_var %in% colnames(dtf) && dtf[, uniqueN(get(by_var)) > 1]) {
+    facet_formula <- as.formula(sprintf('~%s', by_var))
+    ## Test if labels are expressions or regular strings
+    if (dtf[, grepl('~', get(by_var)[1])]) {
+      p <- p + facet_wrap(facet_formula, labeller = label_parsed)
+    } else {
+      p <- p + facet_wrap(facet_formula)
+    }
+  }
+  return(p)
+}
+
+if (F) {
+  # plot_immune_editing_detection_sens(editing_analysis_dat,
+  #                                    by_var = 'proj_count_string')
+  # maartenutils::w_ggsave(plot = last_plot(), fn = 'IE_power_analysis',
+  #                        img_folder = img_loc,
+  #                        filetypes = c('pdf', 'grob'),
+  #                        w=140, h=90, units = 'mm')
+  plot_immune_editing_detection_sens(
+    editing_analysis_dat[project_extended == 'Rectum'])
+  maartenutils::w_ggsave('ie_power_analysis_superpatient_rectum',
+           filetypes = c('pdf'), w=80, h=80, units = 'mm')
+}
+```
+
+
+# Effect of patient filtering on mutational load distributions
+
+Strict filtering enriches for low(er) mutational loads in the control group.
+A: lenient filtering, B: strict filtering
+
+```{r, effect_of_hla_filtering, warning=FALSE, echo=FALSE, fig.width = 17.4/2.54}
+# source('~/antigenic_space/bin/install_packages.R')
+#' Plot mutational load as function of tumor type and HLA label
+devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
+lazy_assign_rds()
+
+hla_f <- filter_by_hla(p_dat, other_allele_coverage_thresh = 0)
+# y_var =  'c_muts.missense_mutation'
+# hla_var = 'hla_a0201_status_b'
+# by_var = 'project_extended'
+# sum_dat <- hla_f[, .SD[, c(as.list(summary(get(y_var))), 'N' = .N),
+#                        by = hla_var],
+#                  by = by_var] %>% normalize_colnames()
+
+plot_hla_mutational_load <- function(dtf = hla_f,
+                                     y_var =  'c_muts.missense_mutation',
+                                     hla_var = 'hla_a0201_status_b',
+                                     by_var = 'project_extended') {
+  ggplot(dtf, aes_string(x = by_var, y = y_var, fill = hla_var)) +
+    geom_boxplot(outlier.size = .05, lwd = .2) +
+    scale_y_continuous(trans = 'log10', name = '# Missense mutations') +
+    scale_fill_manual(name = '',
+                      values = gen_editing_palette(dtf = dtf,
+                                                   hla_var = hla_var)) +
+    scale_x_discrete(name = '') +
+    coord_flip() +
+    theme_fas()
+}
+
+hla_f <- filter_by_hla(p_dat, other_allele_coverage_thresh = 0)
+# hla_f[, hla_a0201_status_b]
+p1 <- plot_hla_mutational_load(hla_f)
+hla_f <- filter_by_hla(p_dat, other_allele_coverage_thresh = NULL)
+p2 <- plot_hla_mutational_load(hla_f)
+# maartenutils::plot_panel_layout(list(p1, p2), w = 17.4, h = 16,
+#                                 filename = file.path(img_loc,
+#                                                      'hla_filtering_mutational_load.pdf'))
+comb <- maartenutils::plot_panel_layout(list(p2, p1), w = 17.4, h = 16)
+```
+
+# Robustness of editing result with respect to A0201 similarity threshold
+
+```{r, eval = F, warning=FALSE, echo=FALSE}
+devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
+for (i in seq(0, .2, .01)) {
+  hla_class_dat <- define_hla_similars(i)
+  print(hla_class_dat[, table(hla_a0201_status) / length(hla_a0201_status)])
+}
+```
+
+```{r, message = F, warning=FALSE, echo=FALSE, output='asis'}
+devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
+
+if (F) {
+  corrob_thresh_stab <- rbindlist(lapply(seq(0, .5, .01), function(thresh) {
+    message(thresh)
+    wc_test <- perform_wc_test(snv_tally, test_mode = 'superpatient',
+                 y_val = 'c_muts.snv / i_muts.snv',
+                 hla_corrob_thresh = thresh,
+                 other_allele_coverage_thresh = NULL)
+    if (is.null(wc_test)) return(NULL)
+    cbind(wc_test[, .('pval' = unique(pval)), by = proj_count_string],
+          thresh = thresh)
+  }))
+  w_saveRDS('corrob_thresh_stab')
+} else {
+  w_readRDS('corrob_thresh_stab')
+}
+
+#corrob_thresh_stab <-
+  #merge_proj_counts(dtf = corrob_thresh_stab, by_var = 'project_extended',
+                    ### TODO filter count_dat similarly as other stuff
+                    #count_dat = snv_tally)
+```
+
+```{r, warning=FALSE, echo=FALSE, fig.width = 17.4/2.54}
+corrob_thresh_stab[, proj_count_string_red :=
+                   gsub('~\\(.*\\)', '', proj_count_string)]
+corrob_thresh_stab[, proj_count_string_max :=
+                   max(as.character(proj_count_string)),
+                   by = proj_count_string_red]
+sampled_projs <- corrob_thresh_stab[, unique(proj_count_string_max)]
+sampled_projs <- corrob_thresh_stab[, sample(unique(proj_count_string_max), 7)]
+
+corrob_thresh_stab[thresh == min(thresh),
+									 proj_count_string_max :=
+	factor(proj_count_string_max,
+				 levels = proj_count_string_max[order(pval)])]
+```
+
+```{r, warning=FALSE, echo=FALSE}
+# corrob_thresh_stab[grepl(as.character(sampled_projs[1]), as.character(proj_count_string))]
+# corrob_thresh_stab[, .N, by = proj_count_string]
+# corrob_thresh_stab[, sort(unique(proj_count_string))]
+p4 <- ggplot(corrob_thresh_stab[proj_count_string_max %in% sampled_projs],
+       aes(y = pval, x = thresh,
+       color = proj_count_string_max, group = proj_count_string_max)) +
+  geom_line() +
+  geom_point(size = .5) +
+  theme_fas(# legend.position = 'right',
+            # legend.spacing = unit(0, 'mm'),
+            legend.key.size = unit(1, "mm"),
+            legend.background = element_rect(fill = alpha('white', 0.8),
+                                             size = 2, color = 'black'),
+            # legend.box.margin = margin(0,0,0,0, unit = 'mm'),
+            # legend.margin = margin(0, 0, 0, 0, unit = 'mm'),
+            legend.justification=c(1,1), legend.position=c(0.98,0.98),
+            legend.direction = 'vertical') +
+  scale_colour_manual(name = '',
+    values = setNames(fas_discrete_colors(length(sampled_projs)),
+                      sampled_projs),
+    labels = function(lab) parse(text = as.character(lab))) +
+  scale_y_continuous(name = expression(italic(p)~'-'~value~(chi^2~'-'~test)),
+                     trans = 'identity', expand = c(0, 0)) +
+  scale_x_continuous(name = 'HLA-A*02:01 peptide corroboration threshold',
+                     expand = c(0, 0)) +
+  coord_flip()
+print(p4)
+```
+
+```{r, warning=FALSE, echo=FALSE}
+p4 + facet_wrap(~ proj_count_string_max, labeller = label_parsed) +
+  theme(legend.position = 'none') +
+  scale_colour_manual(name = '', values = rep('black', length(sampled_projs)))
+```
+
+```{r, warning=FALSE, echo=FALSE}
+maartenutils::w_ggsave(plot = p4,
+                       fn = 'ie_hla_similarity_threshold_titration',
+                       img_folder = grob_loc,
+                       filetypes = c('pdf', 'grob'),
+                       w=150, h=70, units = 'mm')
+```
+
+# Rooney method plots
+
+```{r, eval = F, warning=FALSE, echo=FALSE}
+main_text_rooney_plots <- c('AMF', 'CMF')
+si_plots <- setdiff(names(rooney_plots), main_text_rooney_plots)
+# comb <- plot_panel(list(panA, panB), rel_widths = c(1, 2/5), nrow = 1)
+plots <- c(list(panA + theme(legend.position = 'none'), panB),
+           lapply(rooney_plots[main_text_rooney_plots],
+                  function(p) p + theme(legend.position = 'none')))
+plots <- plots[c(1,3,2,4)]
+
+comb <- plot_panel(plots, rel_widths = c(1, 1), rel_heights = c(.6, .3),
+                   nrow = 2, ncol = 2, labels = c('A', 'C', 'B', 'D'))
+# w_ggsave('fig2-absence_of_immune_editing', w = 174, h = 200, units = 'mm',
+#          filetypes = 'pdf', img_folder = manuscript_dir)
+```
+
+```{r, warning=FALSE, echo=FALSE, fig.height = 35 / 2.54, fig.width = 15 / 2.54}
+devtools::load_all(file.path('~/libs', 'maartenutils'))
+devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
+library(ggplot2)
+lazy_assign_rds(assign_env = globalenv())
+# All Rooney-method plots (unaltered except for the loss of some patients out of
+# the control set).
+plot_panel_layout(lapply(seq_along(rooney_plots),
+                  function(p_idx) rooney_plots[[p_idx]] +
+                    theme_fas(base_size = 6,
+                      legend.position = ifelse(p_idx == length(rooney_plots),
+                                               'bottom', 'none'))),
+                  filename = file.path(manuscript_dir,
+                                       'figS2-rooney_plots.pdf'),
+                  heights = c(.3, .3, .2, .2),
+                  w = 17.4, h = 20, ncol = 2)
+# w_ggsave(plot = p, 'figS2-rooney_plots',
+#					 w = 174, h = 200, units = 'mm',
+#					 filetypes = 'pdf', img_folder = manuscript_dir)
+# w_ggsave(plot = p, 'figS2-absence_of_immune_editing',
+#					 w = 174, h = 200, units = 'mm',
+#					 filetypes = 'pdf', img_folder = manuscript_dir)
+```
+
+# Effect of pipeline titration on IE results
+
+```{r, warning=FALSE, echo=FALSE}
+devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
+w_readRDS('editing_param_titration', force_reload = T)
+# editing_param_titration[, proj_count_string]
+# editing_param_titration[, table(proj_count_string)]
+editing_param_titration <- merge_project(editing_param_titration, 
+                                         p_var = 'project_extended')
+# editing_param_titration[, table(project_extended)]
+editing_param_titration[, 'project_extended' :=
+                     gsub('Colon$', "Colon~non*'-'*MSI^{H}", project_extended)]
+
+p_ed <- plot_IE_test_heatmap(editing_param_titration, parse_y = T,
+                             plot_sig_var = 'signif_effect.adj')
+
+maartenutils::w_ggsave(plot = p_ed,
+                       fn = 'pipeline_IE_titration',
+                       img_folder = grob_loc,
+                       filetypes = c('pdf', 'grob'),
+                       w = 130, h = 160, units = 'mm')
+# devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
+# maartenutils::w_ggsave('editing_robustness', w = 12, h = 16, units = 'cm',
+#                        img_folder = manuscript_dir, filetypes = 'pdf')
+```
+
+# Effect of analysis strategy on IE results
+
+```{r, warning=FALSE, echo=FALSE}
+devtools::load_all(file.path('~/libs', 'maartenutils'))
+devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
+graphics.off()
+library(dplyr)
+w_readRDS('IE_analyses_comp', force_reload = T)
+# IE_analyses_comp[, proj_count_string]
+# IE_analyses_comp[, table(project_extended)]
+
+# IE_analyses_comp[project_extended == 'Thyroid'][20:30]
+comprehensive_IE_analyses_heatmap <- IE_analyses_comp %>%
+  plot_IE_test_heatmap(exp_name = 'analysis_name', parse_y = T)
+# print(comprehensive_IE_analyses_heatmap)
+
+# clust_mat <-
+#   # heat_dat[, .(analysis_name, num_sig = c('L' = 1, 'G' = -1)[signif_effect]),
+#   heat_dat[, .(analysis_name, logFC),
+#          by = project_extended] %>%
+#   dcast(project_extended ~ analysis_name) %>%
+#   dplyr::mutate(project_extended = NULL) %>%
+#   as.matrix
+#
+# clust_mat[which(is.na(clust_mat), arr.ind = T)] <- 0
+# clust_mat[which(clust_mat == Inf, arr.ind = T)] <- 2
+# clust_mat[which(clust_mat == -Inf, arr.ind = T)] <- -2
+# ana_clust <- hclust(dist(clust_mat))
+# ana_clust$order
+#
+# heat_dat[, levels(analysis_name)[ana_clust$order]]
+#
+# heat_dat %>%
+#   plot_IE_test_heatmap(exp_name = 'analysis_name', parse_y = T)
+maartenutils::w_ggsave(plot = comprehensive_IE_analyses_heatmap,
+                       fn = 'comprehensive_IE_analyses_heatmap',
+                       img_folder = grob_loc,
+                       filetypes = c('pdf', 'grob'),
+                       w = 174, h = 100, units = 'mm')
+# maartenutils::sys_file_open(file.path(img_loc, sprintf('%s.pdf',
+#                                       'comprehensive_IE_analyses_heatmap')))
+```

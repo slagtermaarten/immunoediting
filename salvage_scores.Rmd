@@ -1,0 +1,63 @@
+```{r, warning=FALSE}
+integration_method = 'union'
+fn_sel <- glue('pr_1.9-pr_anc_1.9')
+hla_sim_method = 'union'
+rds_sub_dir = file.path(rds_dir, 'pres_scores')
+dir.create(rds_sub_dir, showWarnings = F)
+# system(sprintf('rm -rf %s', rds_sub_dir))
+system(sprintf('ls -ltr %s', rds_sub_dir))
+```
+
+2020-07-21 10:50 Switched to a new system for organizing PS scores, wrote some
+code to salvage PS's from previous overview files
+
+```{r, warning=FALSE}
+for (old in c(T, F)) {
+  if (old) {
+    ro_fn <- file.path(rds_dir,
+                       glue::glue('focus_allele_avg_HLA_presentation-hla_sim\\
+                                  _method_-cutoff-integration_method_-union.rds'))
+    PS <- readRDS(ro_fn)
+    score_field <- 'mean_score'
+  } else {
+    PS <- compute_PS_overview(hla_alleles = focus_hlas, mail_notify = T,
+                              verbose = T, redo = F, ncores = ncores)
+    score_field <- 'mean_score_AB'
+  }
+
+  # PS[, unique(LOH_HLA)]
+
+  ## Don't parallelize this as this could cause race conditions
+  ## Only use no LOHHLA estimates such that listed HLAs all certainly contributed
+  ## to PS
+  ## 2020-07-21 09:11 I only trust the A&B scores for now
+  plyr::a_ply(PS, 1, function(r) {
+    if (old) {
+      donor_hlas <- c(r[['hla_a1']], r[['hla_a2']], r[['hla_b1']], r[['hla_b2']], 
+                      r[['hla_c1']], r[['hla_c2']])
+    } else {
+      donor_hlas <- c(r[['hla_a1']], r[['hla_a2']], r[['hla_b1']], r[['hla_b2']])
+    }
+
+    focus_allele <- r[['hla']]
+    if (focus_allele %in% donor_hlas) return(NULL)
+
+    if (r[['LOH_HLA']] == 'LOHHLA') {
+      lost_alleles <- identify_lost_alleles(r[['donor_id']], min_coverage = 0, 
+                                            debug_func = F)
+      donor_hlas <- setdiff(donor_hlas, lost_alleles$alleles)
+    }
+
+    donor_hlas_f <- paste(donor_hlas, collapse = '-')
+    res_fn <- file.path(rds_sub_dir, glue('{focus_allele}_{donor_hlas_f}\\
+    -{fn_sel}\\
+    -hla_sim_method_{hla_sim_method}\\
+    -integration_method_{integration_method}.rds'))
+
+    res <- list('hla' = focus_allele, 'donor_hlas' = donor_hlas, 
+                'ps'= r[[score_field]])
+    # message('Writing to ', res_fn)
+    if (PS_requires_computation(res_fn)) saveRDS(res, res_fn)
+  }, .progress = 'text')
+}
+```

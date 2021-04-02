@@ -1,0 +1,42 @@
+# Tabulate the prevalence of known escape mechanisms
+
+
+```{r, warning=FALSE, echo=FALSE}
+devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
+
+## Inventorise donors with a recurrent mutation in their HLA
+## Unfortunately, cannot do this for A2-like alleles only, we don't know the
+## allele the mutation is in. So err on the safe side, exclude all donors with a
+## mutation in a HLA gene
+# dkfjdfkjakdfjaf adskfj afkaj fdkasj dfkajfk ajdfk askdjf sakjf ksajfk
+fn <- file.path(ma_dir, 'immune_editing', 'data-raw',
+                'polysolver_recurrent_muts.csv')
+fh <- fread(fn)
+fh[, donor_id := gsub('^\\w+-(.*)', '\\1', Sample)]
+hla_recurrent_mutant_donors <- fh[, donor_id] %>% { .[. != ""] }
+w_saveRDS('hla_recurrent_mutant_donors')
+```
+
+On focal DNA damage level
+
+
+```{r, warning=FALSE, echo=FALSE}
+## Problematic for unknown reason
+res <- detect_essential_genes('TCGA-CJ-4888')
+```
+
+#Chromosomal arm level deletions
+
+```{r, FINISHME, eval=F, warning=FALSE, echo=FALSE}
+detect_essential_cnas <- function(donor_id) {
+  cna <- read_pyclone_data(donor_id)
+  if (null_dat(cna)) return(NULL)
+  browser() 
+}
+
+escape_prev_cna <- rbindlist(plyr::llply(intersect(
+                             setdiff(core_donors, 'TCGA-CJ-4888'),
+                     pipeline_out_fns[project %in% tcga_projects, donor_id]),
+                     detect_essential_cnas), fill = T)
+
+```

@@ -1,0 +1,305 @@
+# January 2019
+
+Compute the presentation of all candidate peps by all 6 alleles for any given
+patient
+
+```{r, warning=FALSE, echo=FALSE}
+## Clean up BA tables first
+devtools::load_all(file.path('~/libs', 'quickMHC'))
+unloadNamespace('fasanalysis')
+devtools::load_all(file.path('~/libs', 'maartenutils'))
+library(quickMHC)
+devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
+source(file.path('~/antigenic_space', 'libs', 'fasanalysis', 'R',
+    '2-read_data.R'))
+library(RPostgreSQL)
+library(glue)
+library(dbplyr)
+
+invisible(w_readRDS('optitype_tcga'))
+all_AB_hlas <-
+  optitype_tcga[, unique(c(`hla_a1`, `hla_a2`, `hla_b1`, `hla_b2`))] %>%
+  sort %>% quickMHC::shortenHLA()
+
+all_C_hlas <- optitype_tcga[, unique(c(`hla_c1`, `hla_c2`))] %>%
+  sort %>% quickMHC::shortenHLA()
+
+ncores <- 20
+ncores <- 42
+ncores <- 20
+ncores <- 1
+ncores <- 32
+tumor_peps <- all_peps
+
+hla_class_dat <- copy(w_readRDS('hla_class_dat'))
+setkey(hla_class_dat, donor_id)
+options(warn = 1)
+analysis_version <- 5
+dir.create(file.path(rds_dir, sprintf('V%d', analysis_version)),
+  showWarnings = F)
+
+param_table <- expand.grid(
+  'donor_id' = hla_class_dat[, donor_id],
+  'anchor_hla_allele' = hlas,
+  'pr' = 1.9)
+
+doParallel::stopImplicitCluster()
+if (ncores > 1) {
+  doParallel::registerDoParallel(cores = ncores)
+}
+
+pr_ancillary <- 1.9
+lohhla_table <- NULL
+check_cached <- F
+```
+
+```{r, warning=FALSE, echo=FALSE}
+# purrr::pmap(param_table, function(donor_id, anchor_hla_allele, pr) {
+#   donor_id
+#   })
+if (analysis_version == 4) {
+  lohhla_table <- lohhla_data_clean
+} else if (analysis_version == 2) {
+  pr_ancillary <- 4
+}
+
+ROs <- plyr::llply(1:nrow(param_table), function(i) {
+  pr <- param_table[i, 'pr']
+  anchor_hla_allele <- as.character(param_table[i, 'anchor_hla_allele'])
+  donor_id <- as.character(param_table[i, 'donor_id'])
+
+  mymessage(sprintf('batch %d/%d', i, nrow(param_table)))
+
+  if (is.null(lohhla_table)) {
+    donor_AB_hlas <-
+      hla_class_dat[donor_id, c(hla_a1, hla_a2, hla_b1, hla_b2)] %>%
+      setdiff(anchor_hla_allele)
+    donor_C_hlas <-
+      hla_class_dat[donor_id, c(hla_c1, hla_c2)] %>%
+      setdiff(anchor_hla_allele)
+  } else {
+    l_donor_id <- donor_id
+    subs <- lohhla_table[donor_id == l_donor_id]
+    if (null_dat(subs)) return(NULL)
+    ## Donor HLAs for which substantial evidence of HLA presence was found
+    donor_hlas <- c(subs[hla_allele_1_cn > pt, hla_allele_1],
+                    subs[hla_allele_2_cn > pt, hla_allele_2])
+    donor_AB_hlas <- grep('hla_(a|b)_(.*)', donor_hlas, value = T) %>%
+      gsub('hla_(a|b)_(.*)', '\\1\\2', .) %>% toupper %>%
+      { gsub('_', '', .) } %>% naturalsort
+    donor_C_hlas <- grep('hla_c_(.*)', donor_hlas, value = T) %>%
+      gsub('hla_(c)_(.*)', '\\1\\2', .) %>% toupper %>%
+      { gsub('_', '', .) } %>% naturalsort
+  }
+  donor_hlas <- c(donor_AB_hlas, donor_C_hlas)
+
+  if (is.null(lohhla_table)) {
+    dir.create(file.path(rds_dir, glue('V{analysis_version}')),
+      showWarnings = F)
+    res_fn <- file.path(rds_dir,
+      glue('V{analysis_version}/V{analysis_version}_batch_{i}.rds'))
+  } else {
+    dir.create(file.path(rds_dir, 'lohhla_ROs'), showWarnings = F)
+    donor_hlas_f <- paste(donor_hlas, collapse ='-')
+    res_fn <- file.path(rds_dir,
+      glue('lohhla_ROs/{anchor_hla_allele}_{donor_hlas_f}.rds'))
+  }
+
+  if (file.exists(res_fn) && !check_cached) {
+    res <- readRDS(res_fn)
+    return(res)
+  }
+
+  if (length(donor_hlas) == 0) {
+    res <- list(
+      'donor_id' = donor_id,
+      'hla' = anchor_hla_allele,
+      'N_AB_alleles' = 0,
+      'N_C_alleles' = 0,
+      'frac_peps_promiscuous' = 0,
+      'frac_peps_promiscuous_wC' = 0)
+    return(res)
+  }
+
+  # install.packages('RPostgres')
+  # library('RPostgres')
+  pg <- DBI::dbDriver('PostgreSQL')
+  conn <- RPostgreSQL::dbConnect(pg,
+    user = 'm.slagter', dbname = 'binding_affinity')
+  on.exit(RPostgreSQL::dbDisconnect(conn))
+
+  anchor_table <- tbl(conn, anchor_hla_allele)
+
+  anchor_peps_table <- anchor_table %>%
+    filter(percentile_rank <= pr) %>%
+    select(peptide) %>%
+    distinct %>%
+    collect
+
+  ## Amount of anchor peps before filtering them for co-presentation by other
+  ## alleles
+  N_anchor_peps <- nrow(anchor_peps_table)
+  if (N_anchor_peps == 0)
+    return(NULL)
+
+  ## Query the other alleles of the donor for presentation of the peptides
+  ## presented by the anchor allele
+  for (l_hla in donor_AB_hlas) {
+    if (!null_dat(anchor_peps_table)) {
+      ancillary_table <- tbl(conn, l_hla)
+      ancillary_res <- ancillary_table %>%
+        filter(percentile_rank <= pr_ancillary &
+          peptide %in% anchor_peps_table$peptide) %>%
+        select(peptide) %>%
+        collect
+      ## This will fail if ancillary_res has 0 rows
+      anchor_peps_table <- tryCatch(
+        filter(anchor_peps_table, !peptide %in% ancillary_res$peptide),
+        error = function(e) { anchor_peps_table }
+      )
+    }
+  }
+  frac_peps_promiscuous <- 1 - (nrow(anchor_peps_table) / N_anchor_peps)
+
+  for (l_hla in donor_C_hlas) {
+    if (!null_dat(anchor_peps_table)) {
+      ancillary_table <- tbl(conn, l_hla)
+      ancillary_res <- ancillary_table %>%n
+        filter(percentile_rank <= pr_ancillary &
+          peptide %in% anchor_peps_table$peptide) %>%
+        select(peptide) %>%
+        collect
+      ## This will fail if ancillary_res has 0 rows
+      anchor_peps_table <- tryCatch(
+        filter(anchor_peps_table, !peptide %in% ancillary_res$peptide),
+        error = function(e) { anchor_peps_table }
+      )
+    }
+  }
+  frac_peps_promiscuous_wC <- 1 - (nrow(anchor_peps_table) / N_anchor_peps)
+
+  res <- list(
+    'donor_id' = donor_id,
+    'hla' = anchor_hla_allele,
+    'N_AB_alleles' = length(donor_AB_hlas),
+    'N_C_alleles' = length(donor_C_hlas),
+    'N_anchor_peps' = N_anchor_peps,
+    'frac_peps_promiscuous' = frac_peps_promiscuous,
+    'frac_peps_promiscuous_wC' = frac_peps_promiscuous_wC)
+
+  if (check_cached) {
+    res_stored <- readRDS(res_fn)
+    compare_nums <- function(a, b) {
+      ret <- T
+      if (any(is.na(c(a, b))) && sum(is.na(c(a,b))) != 2) {
+        message('Only one number is NA')
+        ret <- F
+      }
+
+      if (ret && !eps(a, b)) {
+        message('Numbers deviate from each other')
+        ret <- F
+      }
+
+      return(ret)
+    }
+    if (compare_nums(res$frac_peps_promiscuous,
+        res_stored$frac_peps_promiscuous) == F) {
+      warning('Values are not identical', i)
+    }
+  }
+
+  mymessage(sprintf('finished batch %d/%d', i, nrow(param_table)))
+  rm(anchor_peps_table)
+  if (!check_cached) saveRDS(res, res_fn)
+  return(res)
+}, .parallel = ncores > 1) %>% rbindlist(fill = T)
+
+setkey(ROs, donor_id, hla)
+ROs <- controlled_merge(ROs, hla_class_dat, by_cols = 'donor_id')
+ROs[, 'anchor_present' :=
+  hla %in% c(hla_a1, hla_a2, hla_b1, hla_b2, hla_c1, hla_c2), 
+  by = 1:nrow(ROs)]
+ROs <- clean_columns('', ROs, 'hla_allele_status')
+saveRDS(ROs, file.path(rds_dir, glue('ROs{analysis_version}.rds')))
+```
+
+```{r, warning=FALSE, echo=FALSE}
+unloadNamespace('maartenutils')
+unloadNamespace('fasanalysis')
+library(magrittr)
+devtools::load_all(file.path('~/libs', 'maartenutils'))
+devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
+source(file.path('~/antigenic_space', 'libs', 'fasanalysis', 'R', 'STS.R'))
+library(glue)
+
+i <- 105
+V3res <- readRDS(file.path(rds_dir, glue('V3/V3_batch_{i}.rds')))
+V2res <- readRDS(file.path(rds_dir, glue('V2/V2_batch_{i}.rds')))
+V1res <- readRDS(file.path(rds_dir, glue('V1/V1_batch_{i}.rds')))
+```
+
+
+```{r, warning=FALSE, echo=FALSE}
+## Compare ROs vs ROs2 (former should be lower or equal)
+fh_o <- w_readRDS('ROs')
+fh_n <- w_readRDS('ROs2')
+setnames(fh_n, 'frac_peps_promiscuous_wC', 'frac_peps_promiscuous_wC_n')
+merged <- controlled_merge(fh_n, fh_o)
+ggplot(merged,
+  aes(x = frac_peps_promiscuous_wC, y = frac_peps_promiscuous_wC_n,
+    colour = anchor_present)) + geom_point()
+```
+
+```{r, warning=FALSE, echo=FALSE}
+p1 <-
+  ggplot(ROs, aes(x = frac_peps_promiscuous, fill = anchor_present)) +
+  geom_histogram() +
+  facet_wrap(~hla)
+p2 <-
+  ggplot(ROs, aes(x = frac_peps_promiscuous_wC, fill = anchor_present)) +
+  geom_histogram() +
+  facet_wrap(~hla)
+
+fn <- file.path(img_loc, 'repertoire_overlap_with_anchor_allele_dists.pdf')
+tab <- maartenutils::plot_panel_layout(list(p1, p2),
+  filename = fn, labels = NULL, w = 17.4, h = 25, ncol = 1, nrow = 2)
+sys_file_open(fn)
+```
+
+# Order candidate peptides by different HLAs
+
+```{r, warning=FALSE, echo=FALSE}
+devtools::load_all(file.path('~/libs', 'maartenutils'))
+devtools::load_all(file.path('~/libs', 'quickMHC'))
+devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
+w_readRDS('optitype_tcga')
+did <- sample(optitype_tcga[, donor_id], 1)
+donor_hlas <- optitype_tcga[donor_id == did,
+  c(hla_a1, hla_a2, hla_b1, hla_b2, hla_c1, hla_c2)] %>%
+  unique() %>%
+  shortenHLA
+## Look within the peptide set that passes NMD, expression and processing
+opts <- default_opts
+opts$expression_threshold <- 0
+opts$sts_filtering <- F
+opts$percentile_rank <- 100
+opts$nmd_filtering <- T
+peps_uf <- compile_peps(donor_id = did, opts = opts) %>%
+  filter_peptides(opts = opts)
+
+all_peps_all_hlas <- rbindlist(lapply(donor_hlas, function(hla_allele) {
+  pred <- BindingPredictor$new(hla_allele = hla_allele)
+  cbind('hla_allele' = hla_allele, pred$query(peps_uf$tumor_peptide))
+}))
+
+plots <- lapply(donor_hlas, function(anchor_allele) {
+  exp_mat <- dcast(all_peps_all_hlas, peptide ~ hla_allele,
+    value.var = 'percentile_rank')
+  p_dat <- melt(exp_mat, id.vars = c('peptide', anchor_allele),
+    variable.name = 'other_allele')
+  ggplot(p_dat, aes_string(x = anchor_allele, y = 'value',
+      colour = 'other_allele')) +
+    geom_point()
+})
+```

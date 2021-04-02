@@ -1,0 +1,261 @@
+```{r, warning=FALSE, echo=FALSE}
+source(file.path('~/antigenic_space/maarten-analyses/immune_editing',
+    'continuous_IE_detection_init.R'))
+```
+
+# Example plots
+
+Make some exemplary scatter plots for individual pipeline settings
+
+```{r, warning=FALSE, echo=FALSE}
+# devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
+source(file.path('~/antigenic_space', 'maarten-analyses', 'immune_editing',
+    'continuous_IE_detection_init.R'))
+
+# debug(compute_continuous_IE_statistics)
+# debug(merge_hla)
+# debug(test_continuous_IE)
+# debug(plot_repertoire_overlap_vs_yield_rate)
+focus_allele = 'A0201'
+focus_allele = 'B4001'
+focus_allele = 'B2705'
+an = 'twoD_sens_analysis'
+point_alpha = .4
+point_alpha = .2
+
+ncores <- 12
+ncores <- 8
+ncores <- 36
+ncores <- 8
+ncores <- 1
+doParallel::registerDoParallel(cores = ncores)
+
+
+cancer_types <- c(
+  'Prostate', 'Pancreas', 'Melanoma', 'Breast LumA',
+  'Breast~Normal^{\'like\'}', 'Pan*\'-\'*cancer',
+  'Head~and~neck~HPV^{\'+\'}'
+)
+
+cancer_types <- c(
+  'Head~and~neck~HPV^{\'+\'}'
+)
+
+hla_alleles <- focus_hlas
+
+
+for (idx in c(4, 66, 22, 76)) {
+  for (colour_vars in list(NULL, 'IE_essentiality_impaired', 'CYT')) {
+    for (hla_allele in hla_alleles) {
+      res <- test_continuous_IE(
+        analysis_name = an,
+        reg_method = 'rlm_one_group',
+        # partition_vars = c('IE_essentiality_impaired'),
+        colour_vars = colour_vars,
+        redo = T,
+        point_alpha = point_alpha,
+        repertoire_overlap_dat = readRDS(
+          file.path(rds_dir, 'focus_allele_avg_HLA_presentation.rds')),
+        focus_allele = hla_allele,
+        idx = idx,
+        reg_plot = T)
+
+      f_colour_vars <- paste(colour_vars, collapse = '_and_') %>%
+        prepend_hyphen
+
+      for (tt in cancer_types) {
+        # print(res$stats[[tt]])
+        p <- res$plots[[tt]]
+        if (!is.null(p)) {
+          opts_string <- c(as.list(ds_param_grid[idx, ]),
+            'hla_allele' = hla_allele) %>%
+            complement_options %>%
+            gen_opts_string %>%
+            { gsub(' ', '_', .) }
+          ggsave(p, filename = file.path(img_loc,
+              glue::glue('{opts_string}_{tt}{f_colour_vars}_IE_scatter.png')),
+            width = 10, height = 8, units = 'cm')
+        }
+      }
+    }
+  }
+}
+```
+
+# Precompute regression coefficients
+
+```{r, eval = F, warning=FALSE, echo=FALSE}
+## Debug file name generation
+source(file.path(ma_dir, 'immune_editing', 'continuous_IE_detection_helpers.R'))
+# debugonce(gen_cont_IE_ds_fn)
+obj_fn <- gen_cont_IE_ds_fn(focus_allele = 'A0201',
+  analysis_name = 'rooney_param_titration',
+  idx = 1, fn_suffix = '', overlap_var = '')
+```
+
+```{r, warning=FALSE, echo=FALSE}
+source(file.path(ma_dir, 'immune_editing', 'continuous_IE_detection_precompute.R'))
+```
+
+# Grid plots
+
+```{r, warning=FALSE, echo=FALSE}
+source(file.path(ma_dir, 'immune_editing', 
+    'continuous_IE_detection_gridplots.R'))
+source(file.path(ma_dir, 'immune_editing',
+    'continuous_IE_detection_gridplots_w_power.R'))
+```
+
+# Integration of different HLA alleles
+
+For credible signals of immune editing for a combination of tumor type and
+analysis strategy (i.e. a statistical unit), the 5 different focus alleles
+should give consistent and strong signals of editing. In order to research this,
+we summarize the 5 alleles for each statistical unit by finding the median rc
+(and its associated p-value) for each statistical unit. Note that the alleles
+are not completely independent of each other due to commonalities in e.g. the
+expression filters and hence combining their individual statistics for this
+purpose would be grounded on invalid assumptions.
+
+## Assess consistency in regression coefficients
+
+Consistency in regression coefficients between alleles by computing correlation
+coefficients between analyses/HLAs. See function `compile_all_coef_overview`.
+
+## Correlation coefficients between different HLA alleles
+
+```{r, warning=FALSE, echo=FALSE}
+hla_sim_range = NULL
+hla_sim_range = c(0, 1)
+all_coef_overviews <- compile_all_coef_overview(hla_sim_range = hla_sim_range)
+
+plyr::l_ply(all_coef_overviews, function(all_coef_overview) {
+  wide_dat <- dcast(all_coef_overview,
+    analysis_name + analysis_idx + project_extended ~ focus_allele,
+    value.var = 'rc')
+
+  plot_corr_matrix <- function(wide_dat, pname = '') {
+    M <- as.matrix(wide_dat[, hlas, with = F])
+    corr_M <- cor(M, method = 'spearman', use = 'pairwise.complete.obs')
+    # install.packages("corrplot")
+    library(corrplot)
+    overlap_var <- prepend_hyphen(overlap_var)
+    pname <- prepend_hyphen(pname)
+    LOH_HLA <- attr(all_coef_overview, 'patient_selection')[['LOH_HLA']] %>%
+      prepend_hyphen
+    pic <- attr(all_coef_overview, 'patient_selection') %>%
+      `[[`('patient_inclusion_crit') %>%
+      prepend_hyphen
+    png(file.path(img_loc,
+        glue::glue('cont_IE_pairwise_spearman_corrs{overlap_var}{pic}{pname}.png')))
+    corrplot(corr_M, method = 'color', tl.col = 'black')
+    dev.off()
+  }
+
+  for (pe in wide_dat[, unique(project_extended)]) {
+    tryCatch(plot_corr_matrix(wide_dat[project_extended == pe], pname = pe),
+      error = function(e) { print(e) })
+  }
+
+  for (idx in wide_dat[, unique(analysis_idx)]) {
+    for (an in wide_dat[, unique(analysis_name)]) {
+      tryCatch(plot_corr_matrix(
+          wide_dat[analysis_name == an & analysis_idx == idx],
+          pname = glue::glue('{an}_{idx}')),
+        error = function(e) { print(e) })
+    }
+  }
+})
+# all_coef_overview[, unique(analysis_name)]
+```
+
+## But can we exclude the presence of editing...?
+
+Find combinations of tumor types and IE settings (40 unique ones) that
+consistently (over all focus alleles) indicate immune editing.
+
+```{r, warning=FALSE, echo=FALSE}
+all_coef_overviews <- readRDS(file.path(rds_dir, 'all_coef_overviews.rds'))
+
+master_overview <- purrr::imap(all_coef_overviews, function(overview, i) {
+  cbind(overview, patient_selection_settings[i, ])
+}) %>% rbindlist(fill = T)
+master_overview[, analysis_name := factor(analysis_name)]
+master_overview[, LOH_HLA := factor(LOH_HLA)]
+master_overview[, patient_inclusion_crit := factor(unlist(patient_inclusion_crit))]
+master_overview[, lapply(.SD, class)]
+```
+
+```{r, warning=FALSE, echo=FALSE}
+A <- function(x) quantile(x, probs = .5)
+p_dtf <- master_overview[, A(rc),
+  by = c('project_extended', 'analysis_name', 'LOH_HLA', 'patient_inclusion_crit')]
+
+ggplot(p_dtf, aes(x = project_extended, y = analysis_name, fill = V1)) +
+  geom_rect() +
+  facet_wrap(~ LOH_HLA + patient_inclusion_crit) +
+  theme_fas()
+```
+
+## Power analysis plotting
+
+
+2019-11-08 15:27
+
+Check a setting that seems problematic
+
+```{r, warning=FALSE, echo=FALSE}
+source(file.path('~/antigenic_space', 'maarten-analyses', 'immune_editing',
+    'continuous_IE_detection_init.R'))
+# source(file.path('~/antigenic_space', 'maarten-analyses', 'immune_editing',
+#     'continuous_IE_detection_helpers.R'))
+pars <- list(focus_allele = 'A0201', 
+  overlap_var = 'mean_score', patient_inclusion_crit = '',
+  redo = T,
+  LOH_HLA = 'LOHHLA', hla_sim_range = c(0, 1), analysis_name = 'clon_param_titration'
+)
+do.call(optim_compute_power_continuous_IE, pars)
+```
+
+```{r, warning=FALSE, echo=FALSE}
+source(file.path(ma_dir, 'immune_editing', 'continuous_IE_detection_helpers.R'))
+
+plyr::l_ply(1:nrow(all_cont_IE_settings), function(idx) {
+  focus_allele <- as.character(all_cont_IE_settings[idx, 'focus_allele'])
+  analysis_name <- as.character(all_cont_IE_settings[idx, 'analysis_name'])
+  # if (analysis_name != 'twoD_sens_analysis') return(NULL)
+  overlap_var <- as.character(all_cont_IE_settings[idx, 'overlap_var'])
+  LOH_HLA <- as.character(all_cont_IE_settings[idx, 'LOH_HLA'])
+  patient_inclusion_crit <-
+    unlist(all_cont_IE_settings[idx, 'patient_inclusion_crit'])
+
+  for (idx in 1:80) {
+    cont_IE_power_plot(
+      focus_allele = focus_allele,
+      analysis_name = analysis_name,
+      redo = F,
+      idx = idx,
+      LOH_HLA = LOH_HLA,
+      patient_inclusion_crit = patient_inclusion_crit,
+      fn_suffix = '',
+      overlap_var = overlap_var)
+  }
+}, .parallel = (ncores > 1 && F))
+```
+
+# Prepare V2 of continuous IE heatmaps
+
+```{r, warning=FALSE, echo=FALSE}
+source(file.path('~/antigenic_space/maarten-analyses/immune_editing',
+    'continuous_IE_detection_init.R'))
+```
+
+```{r, warning=FALSE, echo=FALSE}
+source(file.path(ma_dir, 'immune_editing', 'continuous_IE_detection_helpers.R'))
+source(file.path(ma_dir, 'immune_editing', 'pan_IE_settings_heatmap.R'))
+ncores <- 1
+ncores <- 40
+doParallel::registerDoParallel(cores = ncores)
+c("Pan*'-'*cancer", donor_summary[, levels(project_extended)]) %>%
+  sapply(prep_pan_IE_heatmap, redo = T, ncores = ncores)
+```
