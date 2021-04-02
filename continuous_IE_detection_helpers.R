@@ -1,5 +1,5 @@
 IE_requires_computation <- mod_time_comparator(
-  minimum_mod_time = '2021-4-02 10:40', verbose = TRUE)
+  minimum_mod_time = '2021-4-02 12:14', verbose = TRUE)
 
 ## {{{ Constants 
 scalar_analysis_components <- c('test_yr', 'p_val', 'p_val_no_reg',
@@ -375,15 +375,20 @@ fit_rlm_model <- function(dtf) {
 
   unnormalized_mod <- fit_rlm_(dtf, simple_output = T)
   if (is.null(unnormalized_mod)) return(NULL)
-  dtf$y_var <- dtf$y_var / coef(unnormalized_mod)[1]
+
+  orig_pars <- coef(unnormalized_mod) %>%
+    as.list %>% setNames(c('intercept', 'rc'))
+
+  dtf$y_var <- dtf$y_var / orig_pars[['intercept']]
   normalized_mod <- fit_rlm_(dtf, simple_output = F)
-  # orig_pars <- unnormalized_mod[c('intercept', 'rc')] %>%
-  #   { setNames(., paste('orig_', names(.), sep = '')) }
-  # stopifnot(maartenutils::eps(
-  #   1/unnormalized_mod$intercept * unnormalized_mod$rc,
-  #   normalized_mod$rc, 1e-3))
-  normalized_mod %>%
-    modifyList(unnormalized_mod[c('intercept', 'rc')])
+
+  if (F) {
+    stopifnot(maartenutils::eps(
+      orig_pars$intercept * orig_pars$rc,
+      normalized_mod$rc, 1e-3))
+  }
+
+  normalized_mod %>% modifyList(orig_pars)
 }
 
 
@@ -1573,7 +1578,7 @@ filter_coef_overview <- function(
   print_messages = T,
   force_positive_intercept = F,
   intercept_filter_p_val = NULL,
-  intercept_filter_magnitude = 1e-16,
+  intercept_filter_magnitude = NULL,
   rc_filter_magnitude = NULL,
   scale_filter = NULL,
   AFDP_50_filter = NULL,
