@@ -1,12 +1,12 @@
 IE_requires_computation <- mod_time_comparator(
-  minimum_mod_time = '2021-4-02 12:14', verbose = TRUE)
+  minimum_mod_time = '2021-4-03 10:13', verbose = TRUE)
 
-## {{{ Constants 
+## {{{ Constants
 scalar_analysis_components <- c('test_yr', 'p_val', 'p_val_no_reg',
                                 'logFC', 'n_ref', 'n_test')
 other_analysis_components <- c('reg_plot', 'lm', 'analysis_name',
                                'reg_plot_by_project')
-analysis_components <- c(scalar_analysis_components, 
+analysis_components <- c(scalar_analysis_components,
   other_analysis_components)
 analysis_grp_vars <- c('overlap_var', 'patient_inclusion_crit',
   'LOH_HLA', 'analysis_name', 'analysis_idx', 'project_extended')
@@ -84,7 +84,7 @@ determine_p_var <- function(fill_var) {
 #'
 #'
 determine_threshold <- function(fill_var) {
-  p_var <- switch(fill_var, 
+  p_var <- switch(fill_var,
     'rc' = 0,
     'rc_CYT' = 0,
     'yr_fractional_change' = 0,
@@ -266,7 +266,7 @@ if (F) {
   with(new.env(), {
     ds <- get_donor_summary()
     ds_f <- determine_continuous_IE_yval(ds)
-    all(ds$c_muts.missense_mutation / 
+    all(ds$c_muts.missense_mutation /
       ds$i_muts.missense_mutation == ds_f$y_var,
         na.rm = T
     ) %>% stopifnot()
@@ -404,7 +404,7 @@ fit_rlm_ <- function(dtf, simple_output = F) {
   }
 
   quants <- c(.1, .25, .5, .75, .9)
-  delta_names <- 
+  delta_names <-
     paste0('delta_', c('CI_l', 'mean', 'CI_h'), sep = '') %>%
     c('delta_SE')
   NMADR_eval_locs <- quants %>%
@@ -427,7 +427,7 @@ fit_rlm_ <- function(dtf, simple_output = F) {
       'yr_fractional_change' = NA_real_,
       'scale' = NA_real_,
       'norm_scale' = NA_real_
-    ) %>% c(AFDP_def) %>% c(delta_def) %>% c(NMADR_def)) 
+    ) %>% c(AFDP_def) %>% c(delta_def) %>% c(NMADR_def))
   }
 
   ## Compute absolute fractional difference between predictions (AFDP)
@@ -448,21 +448,26 @@ fit_rlm_ <- function(dtf, simple_output = F) {
     'df' = summary(lc)$df[1:nrow(coef_mat)]
   )
 
-  delta <- predict(lc, 
+  delta <- predict(lc,
     newdata = data.frame(ol = 1), se.fit = T)
-  delta <- as.list(delta$fit + c(-1.96, 0, 1.96) * delta$se.fit - 1) %>%
+  delta <- { delta$fit + c(-1.96, 0, 1.96) * delta$se.fit - 1 } %>%
+    as.list() %>%
     append(list(delta$se.fit)) %>%
     setNames(delta_names)
 
-  ## Median of absolute residuals AFTER RLM convergence
-  MADR <- median(abs(residuals(lc)))
-  intercept <- predict(lc, 
+  ## Median of absolute residuals after RLM convergence, identical to
+  ## lc$s
+  # MADR <- median(abs(residuals(lc))) / 0.6745
+  intercept <- predict(lc,
     newdata = data.frame(ol = 0), se.fit = T)
-  ## Evaluate F_NMADR(NMADR)
-  NMADR_probs <- qnorm(NMADR_eval_locs, 
-    mean = MADR / intercept$fit, 
+  ## Evaluate F_NMADR^{-1}(q)
+  NMADR_probs <- qnorm(NMADR_eval_locs,
+    mean = lc$s / intercept$fit,
     sd = intercept$se.fit) %>%
     as.list
+  norm_scale <- lc$s / coef_mat[1, 1]
+  stopifnot(maartenutils::eps(
+      norm_scale, NMADR_probs[['NMADR_q50']], 1e-3))
 
   return(list(
     'lm' = lc,
@@ -476,7 +481,7 @@ fit_rlm_ <- function(dtf, simple_output = F) {
     'converged' = lc$converged,
     'yr_fractional_change' = coef_mat[2, 1] / coef_mat[1, 1],
     'scale' = lc$s,
-    'norm_scale' = lc$s / coef_mat[1, 1]
+    'norm_scale' = norm_scale 
   ) %>% c(AFDP_stats) %>% c(delta) %>% c(NMADR_probs))
 }
 
@@ -591,34 +596,35 @@ recover_tumor_type <- function(tumor_type = NULL, project_extended = NULL) {
 # recover_tumor_type(project_extended = 'Rectum')
 
 
-#' Master function for continuous IE detection. Perform and plot IE analyses for
-#' all samples combined and for each level of column \code{project_extended}
-#' separately
+#' Master function for continuous IE detection. Perform and plot IE
+#' analyses for all samples combined and for each level of column
+#' \code{project_extended} separately
 #'
-#' @param reg_plot Include regression plots of the combined cohort and all
-#' cohorts (levels of \code{project_extended}) separately
+#' @param reg_plot Include regression plots of the combined cohort and
+#' all cohorts (levels of \code{project_extended}) separately
 #'
 test_continuous_IE <- function(
+  overlap_var = 'mean_score',
+  patient_inclusion_crit = 'none',
+  LOH_HLA = 'no_LOHHLA',
   analysis_name = 'twoD_sens_analysis',
-  project_extended = NULL,
-  analysis_idx = 1,
   focus_allele = 'A0201',
+  analysis_idx = 1,
+  reg_method = 'rlm',
+  project_extended = NULL,
+  hla_sim_range = NULL,
+  z_normalize = F,
   redo = F,
   return_grob = F,
-  reg_method = 'rlm',
-  patient_inclusion_crit = 'none',
   ncores = 1,
   check_res = F,
   partition_vars = c(),
   stats_idx = 1,
-  hla_sim_range = NULL,
-  z_normalize = F,
-  LOH_HLA = 'no_LOHHLA',
   verbose = F,
-  overlap_var = 'mean_score',
   include_call = F,
   ds_frac = NULL,
-  return_res = T) {
+  return_res = T,
+  debug = F) {
 
   ## No point in doing an intercept vs. slope comparison as is being
   ## done in the current Bayesian analysis when z_normalize == TRUE
@@ -627,7 +633,7 @@ test_continuous_IE <- function(
       ' not be used in together')
   }
 
-  if (include_call) 
+  if (include_call)
     f_args <- as.list(environment())
 
   o_fn <- gen_cont_IE_fn(
@@ -647,7 +653,7 @@ test_continuous_IE <- function(
   )
 
   ## Don't cache downsampled sub-analyses
-  if (is.null(ds_frac) && !IE_requires_computation(o_fn) && 
+  if (is.null(ds_frac) && !IE_requires_computation(o_fn) &&
       !redo && !check_res) {
     if (return_res) {
       ret_val <- tryCatch(
@@ -658,6 +664,8 @@ test_continuous_IE <- function(
       return(NULL)
     }
   }
+
+  if (debug) browser()
 
   prep <- prep_cont_IE_analyses(
     focus_allele = focus_allele,
@@ -681,7 +689,7 @@ test_continuous_IE <- function(
       'stats' = NA
     )
   } else {
-    stats_by_project <- plyr::llply(auto_name(prep$projects), 
+    stats_by_project <- plyr::llply(auto_name(prep$projects),
       function(pe) {
       data_subs <- subset_project(prep$dtf, pe)
       if (null_dat(data_subs)) return(NULL)
@@ -696,7 +704,7 @@ test_continuous_IE <- function(
     }, .parallel = (ncores > 1))
 
     ret <- list(
-      'analysis_name' = 
+      'analysis_name' =
         (attr(prep$dtf, 'analysis_name') %||%
           glue::glue('{focus_allele}_{analysis_name}')),
       'stats' = stats_by_project
@@ -798,23 +806,23 @@ prep_cont_IE_analyses <- function() {
 
   ## Downsample patients
   if (!is.null(ds_frac)) {
-    dtf <- dtf[sample(1:nrow(dtf), ceiling(nrow(dtf)*ds_frac), 
+    dtf <- dtf[sample(1:nrow(dtf), ceiling(nrow(dtf)*ds_frac),
       replace = T), ]
   }
 
   ## Annotate with required additional variables
   if ('IE_essentiality_impaired' %in% partition_vars ||
-      any(patient_inclusion_crit %in% c('strict_TR', 'TR'))) {
+      any(patient_inclusion_crit != 'none')) {
     dtf <- setDT(dtf)
-    FDR_thresh <- switch(patient_inclusion_crit, 
-      'strict_TR' = .01, 'TR' = .1
+    FDR_thresh <- switch(patient_inclusion_crit,
+      'strict_TR' = .01, 'TR' = .1, FDR10 = .1, FDR1 = .01
     )
-    dtf <- 
-      annotate_donor_by_IE_essentiality(dtf, 
+    dtf <-
+      annotate_donor_by_IE_essentiality(dtf,
         FDR_thresh = FDR_thresh, verbose = verbose)
     dtf[, mean(IE_essentiality_impaired)]
   }
-  if (any(patient_inclusion_crit %in% c('strict_TR', 'TR'))) {
+  if (any(patient_inclusion_crit != 'none')) {
     dtf <- dtf[IE_essentiality_impaired == F]
   }
 
@@ -824,7 +832,7 @@ prep_cont_IE_analyses <- function() {
   HLA_LOH_l <- ifelse(grepl('no', LOH_HLA), 'no_LOHHLA', 'LOHHLA')
   ro_s <- repertoire_overlap_dat[LOH_HLA == HLA_LOH_l]
   dtf <- tryCatch(
-    merge_hla(dtf, 
+    merge_hla(dtf,
       focus_allele = as.character(focus_allele),
       repertoire_overlap_dat = ro_s,
       overlap_var = as.character(overlap_var)
@@ -916,7 +924,6 @@ prep_continuous_param_grid <- function(
   return_res = F,
   overlap_var = 'mean_score',
   plot_ranges = NULL,
-  plot_sig_var = 'signif_effect.adj',
   ...) {
 
   dtf <- plyr::llply(analysis_idxs, function(analysis_idx) {
@@ -934,19 +941,18 @@ prep_continuous_param_grid <- function(
       overlap_var = overlap_var
     )
     if (null_dat(dtf)) return(NULL)
-    projects <- names(dtf$stats)
-    if (length(projects) == 0) { return(NULL) }
-    if (is.null(dtf) || is.null(dtf$stats) || !is.list(dtf$stats)) 
+    if (is.null(dtf) || is.null(dtf$stats) || !is.list(dtf$stats))
       return(NULL)
 
     ## Extract stats
     ## lol := list of lists
     lol <- purrr::map(dtf$stats, `[[`, stats_idx)
     good_idx <- {
-      !sapply(lol, is.null) & 
+      !sapply(lol, is.null) &
       sapply(lol, function(x) !is.null(names(x)))
     } %>% which()
     if (is.null(good_idx)) return(NULL)
+    projects <- names(dtf$stats)[good_idx]
     lol <- lol[good_idx]
     if (is.null(lol)) {
       return(NULL)
@@ -981,15 +987,13 @@ prep_continuous_param_grid <- function(
     }
 
     ret_val <- tryCatch(rbindlist(IE_tests, fill = T) %>%
-      .[, 'project_extended' := projects[good_idx]] %>%
+      .[, 'project_extended' := projects] %>%
       .[, 'analysis_idx' := analysis_idx],
       error = function(e) { print(e); NULL })
     return(ret_val)
   }, .parallel = (ncores > 1)) %>% rbindlist(fill = T)
 
   if (null_dat(dtf) || ncol(dtf) == 2) return(NULL)
-  dtf[project_extended == 'Combined',
-    project_extended := 'Pan*\'-\'*cancer']
 
   pipeline_param_titration_grid_dat <- dtf %>%
     .[, analysis_name := sapply(analysis_idx, function(l_idx)
@@ -997,7 +1001,7 @@ prep_continuous_param_grid <- function(
             c(as.list(ds_param_grid[l_idx, ]),
               'hla_allele' = focus_allele))))]
 
-  f_stats_idx <- ifelse(stats_idx == 1, '', 
+  f_stats_idx <- ifelse(stats_idx == 1, '',
     glue::glue('-SI_{stats_idx}'))
 
   return(list(
@@ -1008,15 +1012,11 @@ prep_continuous_param_grid <- function(
 
 
 format_overview_res <- function(
-  dtf, 
-  reg_method = NULL, 
+  dtf,
+  reg_method = NULL,
   z_normalize = NULL,
   ds_frac = NULL,
   iter = NULL) {
-  if ('patient_inclusion_crit' %in% colnames(dtf) &&
-      is.list(dtf$patient_inclusion_crit)) {
-    dtf$patient_inclusion_crit <- unlist(dtf$patient_inclusion_crit)
-  }
 
   setDT(dtf)
 
@@ -1026,7 +1026,7 @@ format_overview_res <- function(
     dtf[, yr_fractional_change := estimate]
   }
 
-  if ('hla_sim_range' %in% colnames(dtf) && 
+  if ('hla_sim_range' %in% colnames(dtf) &&
       is.factor(dtf$hla_sim_range)) {
     dtf[, hla_sim_range :=
         c('all', '<= 1')[as.integer(sapply(hla_sim_range, is.null)) + 1]]
@@ -1034,7 +1034,7 @@ format_overview_res <- function(
   }
 
   if ('analysis_name' %in% colnames(dtf)) {
-    dtf[, analysis_name := 
+    dtf[, analysis_name :=
       factor(analysis_name, levels = analysis_names)]
   }
 
@@ -1043,7 +1043,7 @@ format_overview_res <- function(
   }
 
   if (!is.null(z_normalize)) {
-    dtf[, 'z_normalize' := F]
+    dtf[, 'z_normalize' := z_normalize]
   }
 
   if (!is.null(ds_frac)) {
@@ -1076,9 +1076,10 @@ compile_all_coef_overview <- function(
   analysis_idxs = main_analysis_idxs,
   z_normalize = F,
   hla_alleles = focus_hlas,
+  focus_settings = NULL,
   include_non_ds_tallies = (idxs_name != 'main_analysis')) {
 
-  fa_flag <- paste0('-focus_hlas_', paste(hla_alleles, 
+  fa_flag <- paste0('-focus_hlas_', paste(hla_alleles,
       collapse = '_'))
   if (fa_flag == '-focus_hlas_A0201_A1101_B0702_B2705_B4001') {
     fa_flag <- ''
@@ -1086,8 +1087,7 @@ compile_all_coef_overview <- function(
   idxs_name <- attr(analysis_idxs, 'name') %||%
     gsub('_idxs$', '', deparse(substitute(analysis_idxs)))
   analysis_idxs_flag <- paste0('-analysis_idxs=', idxs_name)
-  if (!is.null(ds_frac))
-    stopifnot(!is.null(iter))
+  if (!is.null(ds_frac)) stopifnot(!is.null(iter))
   all_coef_fn <- file.path(rds_dir,
     glue::glue('all_coef_overviews\\
       {fa_flag}\\
@@ -1099,9 +1099,11 @@ compile_all_coef_overview <- function(
       {make_flag(include_non_ds_tallies)}\\
       .rds'))
 
-  if (!IE_requires_computation(all_coef_fn) && !redo) {
+  if (!IE_requires_computation(all_coef_fn) && !redo &&
+      is.null(focus_settings)) {
     return(
-      format_overview_res(readRDS(all_coef_fn),
+      format_overview_res(
+        dtf = readRDS(all_coef_fn),
         reg_method = reg_method,
         ds_frac = ds_frac,
         iter = iter,
@@ -1115,11 +1117,19 @@ compile_all_coef_overview <- function(
     as.list(all_cont_IE_settings) %>%
     purrr::map(unique) %>%
     { .[names(.) != 'focus_allele'] } %>%
-    { purrr::exec(tidyr::expand_grid, !!!., 
+    { purrr::exec(tidyr::expand_grid, !!!.,
         focus_allele = hla_alleles) }
 
   if (!include_non_ds_tallies) {
     all_settings %<>% filter(analysis_name == 'twoD_sens_analysis')
+  }
+
+  if (!is.null(focus_settings)) {
+    setDT(all_settings)
+    sub_args <- focus_settings[intersect(names(focus_settings),
+      colnames(all_settings))]
+    setkeyv(all_settings, names(sub_args))
+    all_settings <- all_settings[sub_args]
   }
 
   ## Make sure donor summaries are available for all hla_alleles and
@@ -1173,19 +1183,16 @@ compile_all_coef_overview <- function(
     dtf <- prep_continuous_param_grid(
       focus_allele = r[['focus_allele']],
       LOH_HLA = r[['LOH_HLA']],
+      analysis_name = r[['analysis_name']],
+      overlap_var = r[['overlap_var']],
+      patient_inclusion_crit = patient_inclusion_crit,
       analysis_idxs = analysis_idxs,
       # hla_sim_range = hla_sim_range,
       redo = redo_subanalyses,
-      patient_inclusion_crit = patient_inclusion_crit,
       ds_frac = ds_frac,
       ncores = ncores,
       reg_method = reg_method,
-      simplify_pvals = F,
-      z_normalize = z_normalize,
-      analysis_name = r[['analysis_name']],
-      overlap_var = r[['overlap_var']],
-      plot_sig_var = plot_sig_var,
-      project_ranking = 'sum_fill_var'
+      z_normalize = z_normalize
     )
 
     if (is.null(dtf)) {
@@ -1201,11 +1208,14 @@ compile_all_coef_overview <- function(
     return(ret_val)
   }, .parallel = F, .inform = F, .progress = 'text')
 
-  saveRDS(all_coef_overviews, all_coef_fn)
-  mymessage(
-    msg = sprintf('Wrote all_coef_overviews to %s', all_coef_fn),
-    instance = 'compile_all_coef_overview'
-  )
+  if (is.null(focus_settings)) {
+    saveRDS(all_coef_overviews, all_coef_fn)
+    mymessage(
+      msg = sprintf('Wrote all_coef_overviews to %s', all_coef_fn),
+      instance = 'compile_all_coef_overview'
+    )
+  }
+
   return(
     format_overview_res(
       all_coef_overviews,
@@ -1333,6 +1343,17 @@ print_overview_stats <- function(dtf, stage_id = '',
         keyby=cut(post_prob, breaks = 20)] %>%
       dplyr::mutate(fd = log2(N) - log2(expected)) %>%
       print
+  }
+
+  if ('delta_CI_h' %in% colnames(dtf)) {
+    cat('\nSummary of delta_CI_l\n')
+    print(dtf[, summary(delta_CI_l)])
+    cat('\nSummary of delta_CI_h\n')
+    print(dtf[, summary(delta_CI_h)])
+    cat('\nSummary of delta_SE\n')
+    print(dtf[, summary(delta_SE)])
+    cat('\n', '# CI_h < 0: ', dtf[delta_CI_h < 0, .N])
+    cat('\n', '# CI_l > 0: ', dtf[delta_CI_l > 0, .N])
   }
 
   if (!is.null(latest_stats)) {
@@ -1531,7 +1552,7 @@ assess_coef_composition <- function(dtf) {
 }
 
 
-perform_filter_coef_overview <- function(dtf, code, 
+perform_filter_coef_overview <- function(dtf, code,
   print_messages = T) {
 
   code <- rlang::enquo(code)
@@ -1586,11 +1607,13 @@ filter_coef_overview <- function(
   AFDP_90_filter = NULL,
   NMADR_q75_filter = NULL,
   adaptive_scale_filter = FALSE,
+  adaptive_NMADR_q75_filter = FALSE,
+  delta_SE_filter = NULL,
   min_patients = NULL,
   min_project_size = NULL) {
 
   tmp <- dtf[
-    maartenutils::eps(scale, 0, 1e-16) & 
+    maartenutils::eps(scale, 0, 1e-16) &
     intercept > 1e-3]
   if (nrow(tmp) > 0) stop('Implement zero error filtering!')
 
@@ -1696,6 +1719,19 @@ filter_coef_overview <- function(
       )
   }
 
+  if (!is.null(delta_SE_filter)) {
+    dtf <- perform_filter_coef_overview(
+      dtf = dtf,
+      print_messages = print_messages,
+      code = delta_SE <= delta_SE_filter
+    )
+    if (print_messages)
+      print_overview_stats(dtf,
+        plot_fishtails = plot_fishtails,
+        stage_id = 'After delta_SE filtering'
+      )
+  }
+
   if (!is.null(AFDP_90_filter)) {
     dtf <- perform_filter_coef_overview(
       dtf = dtf,
@@ -1709,10 +1745,12 @@ filter_coef_overview <- function(
       )
   }
 
-  if (!is.null(adaptive_scale_filter) && 
+  if (!is.null(adaptive_scale_filter) &&
+      adaptive_scale_filter &&
       dtf[, any(intercept < 0)]) {
     ## Determine what scale is not tolerable
     thresh <- dtf[intercept < 0, min(abs(norm_scale))]
+    print(thresh)
     dtf <- perform_filter_coef_overview(
       dtf = dtf,
       print_messages = print_messages,
@@ -1721,7 +1759,25 @@ filter_coef_overview <- function(
     if (print_messages)
       print_overview_stats(dtf,
         plot_fishtails = plot_fishtails,
-        stage_id = 'After adaptive scale filtering'
+        stage_id = 'After adaptive norm_scale filtering'
+      )
+  }
+
+  if (!is.null(adaptive_NMADR_q75_filter) &&
+      adaptive_NMADR_q75_filter &&
+      dtf[, any(intercept < 0)]) {
+    ## Determine what NMADR_q75 is not tolerable
+    thresh <- dtf[intercept < 0, min(NMADR_q75)]
+    cat('Required threshold inferred to be: ', thresh, '\n')
+    dtf <- perform_filter_coef_overview(
+      dtf = dtf,
+      print_messages = print_messages,
+      code = abs(NMADR_q75) < thresh
+    )
+    if (print_messages)
+      print_overview_stats(dtf,
+        plot_fishtails = plot_fishtails,
+        stage_id = 'After adaptive NMADR_q75 filtering'
       )
   }
 
@@ -1738,7 +1794,7 @@ filter_coef_overview <- function(
       )
   }
 
-  if (!is.null(min_patients) && 
+  if (!is.null(min_patients) &&
       dtf[, any(n_patients < min_patients)]) {
     dtf <- perform_filter_coef_overview(
       dtf = dtf,
@@ -1777,6 +1833,11 @@ filter_coef_overview <- function(
   dtf[, project_extended := factor(project_extended,
     levels = pe$project_extended)]
   dtf[, tumor_type := factor(tumor_type, levels = pe$tumor_type)]
+
+  ## Some sanity checks
+  # stopifnot(dtf[, all(intercept > 0)])
+  # browser(expr = dtf[, all(intercept > 0)])
+  stopifnot(!dtf[, all(maartenutils::eps(intercept, 1, 1e-1))])
 
   return(dtf)
 }
@@ -1869,18 +1930,18 @@ hmp_wrapper <- function(v) {
 
 #' Summarize analyses of multiple alleles to one representative allele
 #'
-#' Sort the alleles with respect to the \code{sort_var} and slice out the middle
-#' one. The different methods pertain to different ways of dealing with cases
-#' where there are an even number of alleles to pick a representative allele
-#' from.
+#' Sort the alleles with respect to the \code{sort_var} and slice out
+#' the middle one. The different methods pertain to different ways of
+#' dealing with cases where there are an even number of alleles to
+#' pick a representative allele from.
 #'
-#' aggressive: pick the lowest (most consistent with immunoediting/neo-antigen
-#' depletion)
-#' careful: select middle two analyses and average their results
-#' conservative: pick the highest (most consistent with neo-antigen enrichment)
+#' aggressive: pick the lowest (most consistent with
+#' immunoediting/neo-antigen depletion) careful: select middle two
+#' analyses and average their results conservative: pick the highest
+#' (most consistent with neo-antigen enrichment)
 #'
-pick_representative_allele <- function(dtf, sort_var = 'depletion_full',
-  method = 'DT_careful') {
+pick_representative_allele <- function(dtf,
+  sort_var = 'depletion_full', method = 'DT_careful') {
 
   dtf <- format_overview_res(dtf)
 
@@ -2039,4 +2100,18 @@ if (F) {
       method = 'dplyr_aggressive')$rc == vanilla_median)
 
   # pick_representative_allele(test_dat, sort_var = 'rc', method = 'DT_careful')
+}
+
+
+cont_IE_fn_to_args <- function(
+  fn = paste0('cont-IE-twoD_sens_analysis-A0201-mean_score',
+    '-no_LOHHLA-FDR1-rlm-not_z_normalized-38.rds')) {
+  fn <- gsub('cont-IE-|.rds', '', fn)
+  args <- setNames(as.list(strsplit(fn, '-')[[1]]),
+    c('analysis_name', 'focus_allele', 'overlap_var', 'LOH_HLA',
+      'patient_inclusion_crit', 'reg_method',
+      'z_normalize', 'analysis_idx'))
+  args$z_normalize <- args$z_normalize == 'not_z_normalized'
+  args$analysis_idx <- as.integer(args$analysis_idx)
+  return(args)
 }
