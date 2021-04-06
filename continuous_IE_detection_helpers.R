@@ -1,5 +1,5 @@
 IE_requires_computation <- mod_time_comparator(
-  minimum_mod_time = '2021-4-03 10:13', verbose = TRUE)
+  minimum_mod_time = '2021-4-06 12:23', verbose = TRUE)
 
 ## {{{ Constants
 scalar_analysis_components <- c('test_yr', 'p_val', 'p_val_no_reg',
@@ -95,8 +95,8 @@ determine_threshold <- function(fill_var) {
 }
 
 
-#' Generate file name(s) to be generated in \code{test_continuous_IE} and
-#' other functions
+#' Generate file name(s) to be generated in \code{test_continuous_IE}
+#' and other functions
 #'
 gen_cont_IE_fn <- function(
   base_name = 'cont-IE',
@@ -370,7 +370,7 @@ fit_wilcox_model <- function(dtf) {
 #' Fit robust regression model with Huber error model
 #'
 #'
-fit_rlm_model <- function(dtf) {
+fit_rlm_model <- function(dtf, perform_sanity_checks = TRUE) {
   if (!test_data_sufficiency(dtf)) return(NULL)
 
   unnormalized_mod <- fit_rlm_(dtf, simple_output = T)
@@ -378,21 +378,35 @@ fit_rlm_model <- function(dtf) {
 
   orig_pars <- coef(unnormalized_mod) %>%
     as.list %>% setNames(c('intercept', 'rc'))
+  
+  pre_trans_scale_avg_norm <- 
+    unnormalized_mod$s / median(dtf$y_var, na.rm = T)
 
   dtf$y_var <- dtf$y_var / orig_pars[['intercept']]
   normalized_mod <- fit_rlm_(dtf, simple_output = F)
 
-  if (F) {
-    stopifnot(maartenutils::eps(
-      orig_pars$intercept * orig_pars$rc,
-      normalized_mod$rc, 1e-3))
+  if (perform_sanity_checks) {
+    trans_test <- 
+      (abs(pre_trans_scale_avg_norm) == Inf && 
+      abs(normalized_mod$scale_avg_norm) == Inf) ||
+      maartenutils::eps(
+        pre_trans_scale_avg_norm, 
+        normalized_mod$scale_avg_norm, 1e-3)
+    browser(expr = !trans_test)
+    stopifnot(trans_test)
+
+    trans_test <- maartenutils::eps(
+      orig_pars$rc / orig_pars$intercept,
+      normalized_mod$rc, 1e-3)
+    browser(expr = !trans_test)
+    stopifnot(trans_test)
   }
 
   normalized_mod %>% modifyList(orig_pars)
 }
 
 
-fit_rlm_ <- function(dtf, simple_output = F) {
+fit_rlm_ <- function(dtf, simple_output = F, include_AFDP = F) {
   dtf <- setDT(dtf)[is.finite(y_var) & is.finite(ol)]
 
   lc <- tryCatch(suppressWarnings(
@@ -411,11 +425,9 @@ fit_rlm_ <- function(dtf, simple_output = F) {
     { setNames(., paste('NMADR_q', 100 * ., sep = '')) }
 
   if (is.null(lc)) {
-    AFDP_def <- map(quants, ~NA_real_) %>%
-      setNames(paste0('AFDP_', 100*quants, sep = ''))
     delta_def <- map(auto_name(delta_names), ~NA_real_)
     NMADR_def <- map(NMADR_eval_locs, ~NA_real_)
-    return(list(
+    out <- list(
       'intercept' = NA_real_,
       'p_val_intercept' = NA_real_,
       'rc' = NA_real_,
@@ -426,18 +438,18 @@ fit_rlm_ <- function(dtf, simple_output = F) {
       'converged' = F,
       'yr_fractional_change' = NA_real_,
       'scale' = NA_real_,
+      'scale_avg_norm' = NA_real_,
       'norm_scale' = NA_real_
-    ) %>% c(AFDP_def) %>% c(delta_def) %>% c(NMADR_def))
-  }
+    ) %>% c(delta_def) %>% c(NMADR_def)
 
-  ## Compute absolute fractional difference between predictions (AFDP)
-  ## and observations
-  non_zero_idx <- dtf[, y_var > 0 | y_var < 0]
-  obs <- dtf[, y_var][non_zero_idx]
-  pred <- predict(lc)[non_zero_idx]
-  dev <- abs((pred - obs) / obs)
-  AFDP_stats <- as.list(quantile(dev, quants)) %>%
-    setNames(paste0('AFDP_', 100*quants, sep = ''))
+    if (include_AFDP) {
+      AFDP_def <- map(quants, ~NA_real_) %>%
+        setNames(paste0('AFDP_', 100*quants, sep = ''))
+      out <- c(out, AFDP_def)
+    }
+     
+    return(out)
+  }
 
   coef_mat <- summary(lc)$coefficients
   coef_mat <- cbind(coef_mat,
@@ -460,7 +472,7 @@ fit_rlm_ <- function(dtf, simple_output = F) {
   # MADR <- median(abs(residuals(lc))) / 0.6745
   intercept <- predict(lc,
     newdata = data.frame(ol = 0), se.fit = T)
-  ## Evaluate F_NMADR^{-1}(q)
+  ## Evaluate F_{NMADR}^{-1}(q)
   NMADR_probs <- qnorm(NMADR_eval_locs,
     mean = lc$s / intercept$fit,
     sd = intercept$se.fit) %>%
@@ -469,7 +481,7 @@ fit_rlm_ <- function(dtf, simple_output = F) {
   stopifnot(maartenutils::eps(
       norm_scale, NMADR_probs[['NMADR_q50']], 1e-3))
 
-  return(list(
+  out <- list(
     'lm' = lc,
     'intercept' = coef_mat[1, 1],
     'p_val_intercept' = coef_mat[1, 4],
@@ -481,8 +493,23 @@ fit_rlm_ <- function(dtf, simple_output = F) {
     'converged' = lc$converged,
     'yr_fractional_change' = coef_mat[2, 1] / coef_mat[1, 1],
     'scale' = lc$s,
+    'scale_avg_norm' = lc$s / median(dtf$y_var),
     'norm_scale' = norm_scale 
-  ) %>% c(AFDP_stats) %>% c(delta) %>% c(NMADR_probs))
+  ) %>% c(delta) %>% c(NMADR_probs)
+
+  if (include_AFDP) {
+    ## Compute absolute fractional difference between predictions
+    ## (AFDP)
+    ## and observations
+    non_zero_idx <- dtf[, y_var > 0 | y_var < 0]
+    obs <- dtf[, y_var][non_zero_idx]
+    pred <- predict(lc)[non_zero_idx]
+    dev <- abs((pred - obs) / obs)
+    AFDP_stats <- as.list(quantile(dev, quants)) %>%
+      setNames(paste0('AFDP_', 100*quants, sep = ''))
+    out <- c(out, AFDP_stats)
+  }
+  return(out)
 }
 
 
@@ -795,8 +822,6 @@ prep_cont_IE_analyses <- function() {
     'neo-antigen yield rate' else 'observed/expected neo-antigens'
   attr(dtf, 'x_label') <- sprintf('%s presentation score',
     quickMHC::ppHLA(focus_allele))
-  attr(dtf, 'y_label') <- sprintf('%s %s',
-    quickMHC::ppHLA(focus_allele), attr(dtf, 'y_type'))
 
   atts <- attributes(dtf)
   dtf <- determine_continuous_IE_yval(dtf)
@@ -815,7 +840,10 @@ prep_cont_IE_analyses <- function() {
       any(patient_inclusion_crit != 'none')) {
     dtf <- setDT(dtf)
     FDR_thresh <- switch(patient_inclusion_crit,
-      'strict_TR' = .01, 'TR' = .1, FDR10 = .1, FDR1 = .01
+      'strict_TR' = .01, 'TR' = .1, 
+      'FDR10' = .1, 'FDR1' = .01, 
+      'FDR0.1' = 0.001, 'FDR0.01' = 0.0001,
+      'lenient' = 0.0001, 'moderate' = 0.01, 'stringent' = .1
     )
     dtf <-
       annotate_donor_by_IE_essentiality(dtf,
@@ -867,7 +895,9 @@ prep_cont_IE_analyses <- function() {
 
   ## Reduce object to crucial columns only in order to make it fit in
   ## memory more easily
-  dtf <- reduce_to_essential_IE_columns(dtf)
+  if (reduce_columns) {
+    dtf <- reduce_to_essential_IE_columns(dtf)
+  }
 
   ## Z-normalize if so desired (no!)
   if (z_normalize) dtf <- normalize_columns(dtf)
@@ -895,6 +925,7 @@ prep_cont_IE_analyses <- function() {
 formals(prep_cont_IE_analyses) <- formals(test_continuous_IE)
 formals(prep_cont_IE_analyses)$min_points_lq <-
   formals(prep_cont_IE_analyses)$min_points_uq <- 3
+formals(prep_cont_IE_analyses)$reduce_columns <- T
 
 
 #' Compile overview for the combination of a set of IE analysis
@@ -1029,7 +1060,7 @@ format_overview_res <- function(
   if ('hla_sim_range' %in% colnames(dtf) &&
       is.factor(dtf$hla_sim_range)) {
     dtf[, hla_sim_range :=
-        c('all', '<= 1')[as.integer(sapply(hla_sim_range, is.null)) + 1]]
+    c('all', '<= 1')[as.integer(sapply(hla_sim_range, is.null)) + 1]]
     dtf[, hla_sim_range := as.factor(hla_sim_range)]
   }
 
@@ -1055,7 +1086,11 @@ format_overview_res <- function(
   }
 
   if (all(c('scale', 'intercept') %in% colnames(dtf))) {
-    dtf[, 'norm_scale' := scale / intercept]
+    if (all(dtf$intercept == 1)) {
+      dtf[, 'norm_scale' := scale]
+    } else {
+      dtf[, 'norm_scale' := scale / intercept]
+    }
   }
 
   return(dtf)
@@ -1077,6 +1112,7 @@ compile_all_coef_overview <- function(
   z_normalize = F,
   hla_alleles = focus_hlas,
   focus_settings = NULL,
+  check_data_availability = T,
   include_non_ds_tallies = (idxs_name != 'main_analysis')) {
 
   fa_flag <- paste0('-focus_hlas_', paste(hla_alleles,
@@ -1134,36 +1170,38 @@ compile_all_coef_overview <- function(
 
   ## Make sure donor summaries are available for all hla_alleles and
   ## analysis_idxs
-  cat('Preparing all tallies:\n')
-  tidyr::expand_grid(
-    hla_allele = hla_alleles,
-    analysis_idx = analysis_idxs) %>%
-    plyr::a_ply(1, function(r) {
-      l_opts <- default_opts
-      l_opts[['verbose']] <- F
-      l_opts[['parallel']] <- F
-      l_opts[['hla_allele']] <- r[['hla_allele']]
-      create_donor_summary(
-        analysis_idx = r[['analysis_idx']],
-        base_opts = l_opts,
-        requires_computation = ds_requires_computation,
-        ncores = ncores,
-        precompute = F,
-        hla_allele = r[['hla_allele']],
-        redo = F,
-        donor_ids = av_donors
-      )
-
-      if (include_non_ds_tallies) {
-        gen_non_ds_tallies(
-          hla_alleles = r[['hla_allele']],
-          analysis_idxs = r[['analysis_idx']],
-          ncores = ncores,
+  if (check_data_availability) {
+    cat('Preparing all tallies:\n')
+    tidyr::expand_grid(
+      hla_allele = hla_alleles,
+      analysis_idx = analysis_idxs) %>%
+      plyr::a_ply(1, function(r) {
+        l_opts <- default_opts
+        l_opts[['verbose']] <- F
+        l_opts[['parallel']] <- F
+        l_opts[['hla_allele']] <- r[['hla_allele']]
+        create_donor_summary(
+          analysis_idx = r[['analysis_idx']],
+          base_opts = l_opts,
           requires_computation = ds_requires_computation,
-          verbose = T
+          ncores = ncores,
+          precompute = F,
+          hla_allele = r[['hla_allele']],
+          redo = F,
+          donor_ids = av_donors
         )
-      }
-    }, .parallel = F, .progress = 'text')
+
+        if (include_non_ds_tallies) {
+          gen_non_ds_tallies(
+            hla_alleles = r[['hla_allele']],
+            analysis_idxs = r[['analysis_idx']],
+            ncores = ncores,
+            requires_computation = ds_requires_computation,
+            verbose = T
+          )
+        }
+      }, .parallel = F, .progress = 'text')
+  }
 
   cat('Performing all regressions:\n')
   i <- 0
@@ -1175,8 +1213,6 @@ compile_all_coef_overview <- function(
       print(i)
       if (i == 1) browser() else return(NULL)
     }
-    patient_inclusion_crit <- r[['patient_inclusion_crit']] %>%
-      { as.character(unlist(.)) }
 
     ## Create single grid for all tumor types and this particular set
     ## of IE settings
@@ -1185,7 +1221,7 @@ compile_all_coef_overview <- function(
       LOH_HLA = r[['LOH_HLA']],
       analysis_name = r[['analysis_name']],
       overlap_var = r[['overlap_var']],
-      patient_inclusion_crit = patient_inclusion_crit,
+      patient_inclusion_crit = r[['patient_inclusion_crit']],
       analysis_idxs = analysis_idxs,
       # hla_sim_range = hla_sim_range,
       redo = redo_subanalyses,
@@ -1596,19 +1632,21 @@ perform_filter_coef_overview <- function(dtf, code,
 
 filter_coef_overview <- function(
   dtf,
-  print_messages = T,
+  print_messages = F,
   force_positive_intercept = F,
   intercept_filter_p_val = NULL,
   intercept_filter_magnitude = NULL,
-  rc_filter_magnitude = NULL,
-  scale_filter = NULL,
+  norm_scale_filter = NULL,
   AFDP_50_filter = NULL,
   AFDP_75_filter = NULL,
   AFDP_90_filter = NULL,
+  NMADR_q50_filter = NULL,
   NMADR_q75_filter = NULL,
   adaptive_scale_filter = FALSE,
+  adaptive_NMADR_q50_filter = FALSE,
   adaptive_NMADR_q75_filter = FALSE,
   delta_SE_filter = NULL,
+  adaptive_delta_SE_filter = FALSE,
   min_patients = NULL,
   min_project_size = NULL) {
 
@@ -1667,16 +1705,30 @@ filter_coef_overview <- function(
       )
   }
 
-  if (!is.null(scale_filter)) {
+  if (!is.null(delta_SE_filter)) {
     dtf <- perform_filter_coef_overview(
       dtf = dtf,
       print_messages = print_messages,
-      code = abs(norm_scale) <= scale_filter
+      code = delta_SE <= delta_SE_filter
     )
     if (print_messages)
       print_overview_stats(dtf,
         plot_fishtails = plot_fishtails,
-        stage_id = 'After scale filtering'
+        stage_id = 'After delta_SE filtering'
+      )
+  }
+
+  if (!is.null(norm_scale_filter)) {
+    dtf <- perform_filter_coef_overview(
+      dtf = dtf,
+      print_messages = print_messages,
+      # code = abs(norm_scale) <= norm_scale_filter
+      code = abs(scale) <= norm_scale_filter
+    )
+    if (print_messages)
+      print_overview_stats(dtf,
+        plot_fishtails = plot_fishtails,
+        stage_id = 'After norm_scale filtering'
       )
   }
 
@@ -1719,19 +1771,6 @@ filter_coef_overview <- function(
       )
   }
 
-  if (!is.null(delta_SE_filter)) {
-    dtf <- perform_filter_coef_overview(
-      dtf = dtf,
-      print_messages = print_messages,
-      code = delta_SE <= delta_SE_filter
-    )
-    if (print_messages)
-      print_overview_stats(dtf,
-        plot_fishtails = plot_fishtails,
-        stage_id = 'After delta_SE filtering'
-      )
-  }
-
   if (!is.null(AFDP_90_filter)) {
     dtf <- perform_filter_coef_overview(
       dtf = dtf,
@@ -1763,6 +1802,24 @@ filter_coef_overview <- function(
       )
   }
 
+  if (!is.null(adaptive_NMADR_q50_filter) &&
+      adaptive_NMADR_q50_filter &&
+      dtf[, any(intercept < 0)]) {
+    ## Determine what NMADR_q50 is not tolerable
+    thresh <- dtf[intercept < 0, min(NMADR_q50)]
+    cat('Required threshold inferred to be: ', thresh, '\n')
+    dtf <- perform_filter_coef_overview(
+      dtf = dtf,
+      print_messages = print_messages,
+      code = abs(NMADR_q50) < thresh
+    )
+    if (print_messages)
+      print_overview_stats(dtf,
+        plot_fishtails = plot_fishtails,
+        stage_id = 'After adaptive NMADR_q50 filtering'
+      )
+  }
+
   if (!is.null(adaptive_NMADR_q75_filter) &&
       adaptive_NMADR_q75_filter &&
       dtf[, any(intercept < 0)]) {
@@ -1780,17 +1837,22 @@ filter_coef_overview <- function(
         stage_id = 'After adaptive NMADR_q75 filtering'
       )
   }
-
-  if (!is.null(rc_filter_magnitude)) {
+  
+  if (!is.null(adaptive_delta_SE_filter) &&
+      adaptive_delta_SE_filter &&
+      dtf[, any(intercept < 0)]) {
+    ## Determine what scale is not tolerable
+    thresh <- dtf[intercept < 0, min(delta_SE)]
+    print(thresh)
     dtf <- perform_filter_coef_overview(
       dtf = dtf,
       print_messages = print_messages,
-      code = abs(rc / intercept) <= rc_filter_magnitude
+      code = delta_SE < thresh
     )
     if (print_messages)
       print_overview_stats(dtf,
         plot_fishtails = plot_fishtails,
-        stage_id = 'After relative rc magnitude filtering'
+        stage_id = 'After adaptive delta_SE filtering'
       )
   }
 
@@ -1838,6 +1900,8 @@ filter_coef_overview <- function(
   # stopifnot(dtf[, all(intercept > 0)])
   # browser(expr = dtf[, all(intercept > 0)])
   stopifnot(!dtf[, all(maartenutils::eps(intercept, 1, 1e-1))])
+
+  dtf[, log10_n_patients := log10(n_patients)]
 
   return(dtf)
 }
