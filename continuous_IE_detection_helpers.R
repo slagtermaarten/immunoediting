@@ -1,5 +1,5 @@
 IE_requires_computation <- mod_time_comparator(
-  minimum_mod_time = '2021-4-06 12:23', verbose = TRUE)
+  minimum_mod_time = '2021-4-07 09:58', verbose = TRUE)
 
 ## {{{ Constants
 scalar_analysis_components <- c('test_yr', 'p_val', 'p_val_no_reg',
@@ -240,7 +240,7 @@ reduce_to_essential_IE_columns <- function(
 #' The first variable starting with a 'c' is generally taken as the
 #' variable defining the amount of neo-antigens created
 #'
-determine_continuous_IE_yval <- function(dtf) {
+determine_continuous_IE_yval <- function(dtf, replace_zeroes = T) {
   ## c_name will 'c_muts.missense_mutation' for regular
   ## donor_summaries
   c_name <- grep('^c.*', names(dtf), value = T) %>%
@@ -248,7 +248,14 @@ determine_continuous_IE_yval <- function(dtf) {
     .[1]
   i_name <- gsub('c_(.*)', 'i_\\1', c_name)
   if (!is.na(c_name) && c_name != 'NA') {
-    dtf$y_var <- dplyr::pull(dtf, c_name) / dplyr::pull(dtf, i_name)
+    num <- dplyr::pull(dtf, c_name) 
+    denum <- dplyr::pull(dtf, i_name)
+    dtf$y_var <- num / denum
+    if (replace_zeroes) {
+      dtf$y_var[which(is.na(num) & !is.na(denum))] <- 0
+    } else {
+      all(dtf$y_var > 0, na.rm = T)
+    }
     dtf$weight <- dplyr::pull(dtf, i_name)
     attr(dtf, 'y_label') <- 'Neo-antigen yield rate'
   } else {
@@ -370,7 +377,7 @@ fit_wilcox_model <- function(dtf) {
 #' Fit robust regression model with Huber error model
 #'
 #'
-fit_rlm_model <- function(dtf, perform_sanity_checks = TRUE) {
+fit_rlm_model <- function(dtf, perform_sanity_checks = F) {
   if (!test_data_sufficiency(dtf)) return(NULL)
 
   unnormalized_mod <- fit_rlm_(dtf, simple_output = T)
@@ -402,7 +409,12 @@ fit_rlm_model <- function(dtf, perform_sanity_checks = TRUE) {
     stopifnot(trans_test)
   }
 
-  normalized_mod %>% modifyList(orig_pars)
+  out <- normalized_mod %>% 
+    modifyList(orig_pars) %>%
+    ## Ensure scale_avg_norm is not affected by 1/intercept scaling
+    ## in any way
+    modifyList(list('scale_avg_norm' = pre_trans_scale_avg_norm))
+  return(out)
 }
 
 
@@ -811,6 +823,7 @@ prep_cont_IE_analyses <- function() {
 
   ## Load in the data and compute the ordinal variable, save attributes
   dtf <- readRDS(obj_fn)
+  start_N <- dtf[, .N]
 
   # analysis_name = 'rooney_param_titration'
   if (analysis_name == 'rooney_param_titration') {
@@ -866,6 +879,7 @@ prep_cont_IE_analyses <- function() {
       overlap_var = as.character(overlap_var)
     ), error = function(e) { print(e); browser() })
   dtf <- dtf[!is.na(ol)]
+  valid_h_N <- dtf[, .N]
 
   ## Annotate CYT, currently not used in model
   dtf <- merge_CYT(dtf)
@@ -886,6 +900,7 @@ prep_cont_IE_analyses <- function() {
 
   ## Trim to pts with valid dependent variable (y_var)
   dtf <- dtf[!is.na(y_var) & y_var != Inf]
+  valid_y_N <- dtf[, .N]
   if (!is.null(hla_sim_range) && length(hla_sim_range) == 2) {
     dtf <- dtf[ol >= hla_sim_range[1] & ol <= hla_sim_range[2]]
   }
@@ -918,7 +933,11 @@ prep_cont_IE_analyses <- function() {
   out <- list(
     'projects' = observed_projects,
     'dtf' = dtf,
-    'obj_fn' = obj_fn
+    'obj_fn' = obj_fn,
+    'patient_counts' = c(
+      'start' = start_N, 
+      'valid_h' = valid_h_N, 'valid_y' = valid_y_N, 
+      'final' = dtf[, .N])
   )
   return(out)
 }
@@ -1634,9 +1653,13 @@ filter_coef_overview <- function(
   dtf,
   print_messages = F,
   force_positive_intercept = F,
+  min_patients = NULL,
+  min_project_size = NULL,
   intercept_filter_p_val = NULL,
   intercept_filter_magnitude = NULL,
   norm_scale_filter = NULL,
+  scale_avg_norm_filter = NULL,
+  delta_SE_filter = NULL,
   AFDP_50_filter = NULL,
   AFDP_75_filter = NULL,
   AFDP_90_filter = NULL,
@@ -1645,10 +1668,8 @@ filter_coef_overview <- function(
   adaptive_scale_filter = FALSE,
   adaptive_NMADR_q50_filter = FALSE,
   adaptive_NMADR_q75_filter = FALSE,
-  delta_SE_filter = NULL,
   adaptive_delta_SE_filter = FALSE,
-  min_patients = NULL,
-  min_project_size = NULL) {
+  adaptive_norm_scale_filter = FALSE) {
 
   tmp <- dtf[
     maartenutils::eps(scale, 0, 1e-16) &
@@ -1732,6 +1753,19 @@ filter_coef_overview <- function(
       )
   }
 
+  if (!is.null(scale_avg_norm_filter)) {
+    dtf <- perform_filter_coef_overview(
+      dtf = dtf,
+      print_messages = print_messages,
+      code = abs(scale_avg_norm) <= scale_avg_norm_filter
+    )
+    if (print_messages)
+      print_overview_stats(dtf,
+        plot_fishtails = plot_fishtails,
+        stage_id = 'After scale_avg_norm filtering'
+      )
+  }
+
   if (!is.null(NMADR_q75_filter)) {
     dtf <- perform_filter_coef_overview(
       dtf = dtf,
@@ -1783,6 +1817,28 @@ filter_coef_overview <- function(
         stage_id = 'After AFDP_90 filtering'
       )
   }
+
+  if (!is.null(adaptive_norm_scale_filter) &&
+      adaptive_norm_scale_filter &&
+      dtf[, any(intercept < 0)]) {
+    stop('Implement me')
+    ## Determine what scale is not tolerable
+    dtf[is.finite(scale_avg_norm) & intercept < 0] 
+    thresh <- dtf[is.finite(scale_avg_norm) & intercept < 0, 
+      min(abs(scale_avg_norm))]
+    print(thresh)
+    dtf <- perform_filter_coef_overview(
+      dtf = dtf,
+      print_messages = print_messages,
+      code = abs(norm_scale) < thresh
+    )
+    if (print_messages)
+      print_overview_stats(dtf,
+        plot_fishtails = plot_fishtails,
+        stage_id = 'After adaptive norm_scale filtering'
+      )
+  }
+
 
   if (!is.null(adaptive_scale_filter) &&
       adaptive_scale_filter &&
@@ -1856,6 +1912,8 @@ filter_coef_overview <- function(
       )
   }
 
+  ## Apply these filters after all others to ensure we're counting
+  ## 'valid' analyses rather than 'all' analyses
   if (!is.null(min_patients) &&
       dtf[, any(n_patients < min_patients)]) {
     dtf <- perform_filter_coef_overview(
