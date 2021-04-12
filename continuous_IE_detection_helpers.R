@@ -223,7 +223,7 @@ reduce_to_essential_IE_columns <- function(
   setDT(dtf)
   candidate_cols <- c('project_extended', 'donor_id', 'ol',
     'CYT',
-    'mean_score', 'mean_score_AB', 'mean_score_C', 'weight',
+    'c', 'i', 'mean_score', 'mean_score_AB', 'mean_score_C', 'weight',
     'IE_essentiality_impaired', 'CYT', 'hla_allele_status',
     'hla_allele_status_b', 'y_var', 'y_var_sd') %>%
     c(extra_columns)
@@ -256,6 +256,8 @@ determine_continuous_IE_yval <- function(dtf, replace_zeroes = T) {
     } else {
       all(dtf$y_var > 0, na.rm = T)
     }
+    dtf$c <- ifelse(is.na(num), 0, num)
+    dtf$i <- denum
     dtf$weight <- dplyr::pull(dtf, i_name)
     attr(dtf, 'y_label') <- 'Neo-antigen yield rate'
   } else {
@@ -289,8 +291,8 @@ make_names_df_friendly <- function(v) {
 
 test_data_sufficiency <- function(dtf,
   min_pts = 20,
-  min_points_lq = 3,
-  min_points_uq = 3) {
+  min_points_lq = 5,
+  min_points_uq = 5) {
 
   if (is.null(dtf)) return(F)
   setDT(dtf)
@@ -349,6 +351,8 @@ compute_continuous_IE_statistics <- function(
     f <- lm_fit_model
   } else if (reg_method == 'gam') {
     f <- gam_fit_model
+  } else {
+    f <- get(reg_method)
   }
   lm_results <- purrr::map(p_dtf, f)
 
@@ -377,10 +381,12 @@ fit_wilcox_model <- function(dtf) {
 #' Fit robust regression model with Huber error model
 #'
 #'
-fit_rlm_model <- function(dtf, perform_sanity_checks = F) {
+fit_rlm_model <- function(dtf, perform_sanity_checks = F, 
+  weighted = T) {
   if (!test_data_sufficiency(dtf)) return(NULL)
 
-  unnormalized_mod <- fit_rlm_(dtf, simple_output = T)
+  unnormalized_mod <- fit_rlm_(dtf, weighted = weighted, 
+    simple_output = T)
   if (is.null(unnormalized_mod)) return(NULL)
 
   orig_pars <- coef(unnormalized_mod) %>%
@@ -390,7 +396,8 @@ fit_rlm_model <- function(dtf, perform_sanity_checks = F) {
     unnormalized_mod$s / median(dtf$y_var, na.rm = T)
 
   dtf$y_var <- dtf$y_var / orig_pars[['intercept']]
-  normalized_mod <- fit_rlm_(dtf, simple_output = F)
+  normalized_mod <- fit_rlm_(dtf, weighted = weighted, 
+    simple_output = F)
 
   if (perform_sanity_checks) {
     trans_test <- 
@@ -409,21 +416,29 @@ fit_rlm_model <- function(dtf, perform_sanity_checks = F) {
     stopifnot(trans_test)
   }
 
+  # stats
+
   out <- normalized_mod %>% 
     modifyList(orig_pars) %>%
     ## Ensure scale_avg_norm is not affected by 1/intercept scaling
     ## in any way
     modifyList(list('scale_avg_norm' = pre_trans_scale_avg_norm))
+
   return(out)
 }
 
 
-fit_rlm_ <- function(dtf, simple_output = F, include_AFDP = F) {
+fit_rlm_ <- function(dtf, simple_output = F, include_AFDP = F, 
+  weighted = T) {
   dtf <- setDT(dtf)[is.finite(y_var) & is.finite(ol)]
 
   lc <- tryCatch(suppressWarnings(
-      MASS::rlm(y_var ~ ol, data = dtf,
-                x.ret = T, model = T, maxit = 1000)),
+      MASS::rlm(
+        formula = y_var ~ ol, 
+        weights = if (weighted) dtf$weight else NULL,
+        data = dtf,
+        wt.method = 'case',
+        x.ret = T, model = T, maxit = 1000)),
     error = function(e) { NULL })
   if (simple_output) {
     return(lc)
@@ -522,6 +537,84 @@ fit_rlm_ <- function(dtf, simple_output = F, include_AFDP = F) {
     out <- c(out, AFDP_stats)
   }
   return(out)
+}
+
+
+fit_dropout_aware_nb <- function(dtf, remove_outliers = F) {
+  # fit_mod = function(x) 
+  #   glm(c ~ 1 + i + i:ol, data = x, family = poisson())
+  # fit_mod = function(x) MASS::glm.nb(c ~ 1 + i + i:ol, data = x)
+  # fit_mod = function(x) MASS::glm.nb(c ~ 0 + i + i:ol, data = x,
+  #   control = glm.control(maxit = 1000))
+  # fit_mod = function(x) MASS::glm.nb(c ~ 0 + i + ol, data = x,
+  #   control = glm.control(maxit = 1000))
+  # fit_mod = function(x) MASS::glm.nb(c ~ 1 + i + ol + i:ol, data = x,
+  #   control = glm.control(maxit = 1000))
+
+  fit_mod = function(x) MASS::glm.nb(c ~ 1 + i + ol, data = x,
+    control = glm.control(maxit = 1000))
+  fit_nz_mod = function(x) MASS::glm.nb(c ~ 1 + i, data = x,
+    control = glm.control(maxit = 1000))
+
+  ## PHASE 1: subselect patients that have a fighting chance of getting
+  ## at least one neo-antigen with the current filtering settings
+  # l_dtf$c_q <- l_dtf$c / max(l_dtf$c)
+  # l_dtf$i_q <- l_dtf$i / max(l_dtf$i)
+  dtf$i <- round(dtf$i)
+  dtf$c <- round(dtf$c)
+  nz_mod <- fit_nz_mod(dtf)
+  # test_plot({ par(mfrow = c(2, 2)); plot(nz_mod) }, w = 17.4, h = 20)
+  ## Test how many variants are needed for 0 expected mutations
+  min_req_muts <- coef(nz_mod) %>% 
+    { -1 * .['(Intercept)'] / .['i'] } %>%
+    unname
+  l_dtf <- dtf[i > min_req_muts, ]
+  if (!test_data_sufficiency(l_dtf)) {
+    return(NULL)
+  }
+
+  ## PHASE 2: fit model to all sufficiently mutated patients
+  mod <- fit_mod(l_dtf)
+  # test_plot({ par(mfrow = c(2, 2)); plot(mod) }, w = 17.4, h = 20)
+  cooks <- NULL
+  i <- 0
+  while (remove_outliers && nrow(l_dtf) > 0 && is.null(cooks)) {
+    i <- i + 1
+    cooks <- cooks.distance(mod)
+    if (!is.null(cooks)) {
+      cooks_thresh <- quantile(cooks, .975)
+      allowed <- which(cooks.distance(mod) < cook_thresh)
+      l_dtf <- l_dtf[allowed, ]
+    }
+    mod <- fit_mod(l_dtf)
+    # test_plot(hist(cooks, breaks = 100))
+  }
+
+  ## Another, exact, option would be 'ray-scanning'
+  ## https://nl.mathworks.com/matlabcentral/fileexchange/84973-integrate-and-classify-normal-distributions
+  N_mut = median(dtf$i)
+  delta <- mvtnorm::rmvnorm(1e5, 
+      mean = coef(mod), sigma = vcov(mod)
+    ) %>% { 
+    base <- .[, 1] + .[, 2] * N_mut;
+    (.[, 3]) / base 
+  } %>%
+  { c('delta_median' = median(.), 'delta_mad' = mad(.)) }
+  
+  # fit_rlm_model(dtf)
+  # summary(nz_mod)
+  tibble_row(
+    delta_median = delta[1],
+    delta_mad = delta[2],
+    # delta_AIC = AIC(mod),
+    cleaning_i = i,
+    dropped_pts = nrow(dtf) - nrow(l_dtf),
+    n_patients = nrow(dtf),
+    nz_intercept = coef(nz_mod)[1],
+    nz_rc = coef(nz_mod)[2],
+    nz_theta = nz_mod$theta,
+    theta = mod$theta
+  ) %>% return
 }
 
 
@@ -625,7 +718,9 @@ get_repertoire_overlap <- function(ro = NULL, hla_alleles = 'A0201',
 }
 
 
-recover_tumor_type <- function(tumor_type = NULL, project_extended = NULL) {
+recover_tumor_type <- function(
+  tumor_type = NULL, 
+  project_extended = NULL) {
   if (!is.null(tumor_type) && tumor_type %in% tumor_types) {
     return(tumor_type)
   } else if (is.null(tumor_type) && !is.null(project_extended)) {
@@ -654,6 +749,7 @@ test_continuous_IE <- function(
   hla_sim_range = NULL,
   z_normalize = F,
   redo = F,
+  permute_id = NULL,
   return_grob = F,
   ncores = 1,
   check_res = F,
@@ -691,8 +787,9 @@ test_continuous_IE <- function(
     overlap_var = overlap_var
   )
 
-  ## Don't cache downsampled sub-analyses
-  if (is.null(ds_frac) && !IE_requires_computation(o_fn) &&
+  ## Don't cache downsampled/permuted sub-analyses
+  if (is.null(permute_id) && is.null(ds_frac) && 
+      !IE_requires_computation(o_fn) &&
       !redo && !check_res) {
     if (return_res) {
       ret_val <- tryCatch(
@@ -714,6 +811,7 @@ test_continuous_IE <- function(
     hla_sim_range = hla_sim_range,
     z_normalize = z_normalize,
     LOH_HLA = LOH_HLA,
+    permute_y = !is.null(permute_id),
     analysis_idx = analysis_idx,
     overlap_var = overlap_var,
     patient_inclusion_crit = patient_inclusion_crit,
@@ -786,7 +884,8 @@ wrapper_plot_repertoire_overlap_vs_yield_rate <- function(
     stop('Compute test object with include_call = TRUE')
   }
 
-  reg_plots <- plyr::llply(maartenutils::auto_name(projects), function(pe) {
+  reg_plots <- plyr::llply(maartenutils::auto_name(projects), 
+    function(pe) {
     data_subs <- subset_project(attr(test_object, 'prep')$dtf, pe,
       pan_can_includes_all = TRUE)
     if (null_dat(data_subs)) browser()
@@ -806,8 +905,8 @@ wrapper_plot_repertoire_overlap_vs_yield_rate <- function(
 
 
 
-#'  Prepare data for multiple types of downstream analyses. Filter patients and
-#'  prepare the required regression variables.
+#'  Prepare data for multiple types of downstream analyses. Filter
+#'  patients and prepare the required regression variables.
 #'
 #'
 prep_cont_IE_analyses <- function() {
@@ -821,7 +920,8 @@ prep_cont_IE_analyses <- function() {
   if (is.null(obj_fn) || is.na(obj_fn) || length(obj_fn) == 0)
     return(NULL)
 
-  ## Load in the data and compute the ordinal variable, save attributes
+  ## Load in the data and compute the ordinal variable, save
+  ## attributes
   dtf <- readRDS(obj_fn)
   start_N <- dtf[, .N]
 
@@ -837,7 +937,8 @@ prep_cont_IE_analyses <- function() {
     quickMHC::ppHLA(focus_allele))
 
   atts <- attributes(dtf)
-  dtf <- determine_continuous_IE_yval(dtf)
+  dtf <- determine_continuous_IE_yval(dtf, 
+    replace_zeroes = replace_zeroes)
 
   ## Extract the  tumor projects present in this object
   dtf <- subset_project(dtf, project_extended)
@@ -846,6 +947,13 @@ prep_cont_IE_analyses <- function() {
   if (!is.null(ds_frac)) {
     dtf <- dtf[sample(1:nrow(dtf), ceiling(nrow(dtf)*ds_frac),
       replace = T), ]
+  }
+
+  if (!is.null(permute_y) && permute_y) {
+    perm <- sample(1:nrow(dtf))
+    dtf$y_var <- dtf$y_var[perm]
+    dtf$c <- dtf$c[perm]
+    dtf$i <- dtf$i[perm]
   }
 
   ## Annotate with required additional variables
@@ -930,9 +1038,13 @@ prep_cont_IE_analyses <- function() {
   observed_projects <-
     c(sort(as.character(unique(dtf$project_extended))),
       'Pan*\'-\'*cancer')
+
+  h_dist <- table(cut(dtf$ol, seq(0, 1, by = .1)))
+
   out <- list(
     'projects' = observed_projects,
     'dtf' = dtf,
+    'h_dist' = h_dist,
     'obj_fn' = obj_fn,
     'patient_counts' = c(
       'start' = start_N, 
@@ -945,6 +1057,8 @@ formals(prep_cont_IE_analyses) <- formals(test_continuous_IE)
 formals(prep_cont_IE_analyses)$min_points_lq <-
   formals(prep_cont_IE_analyses)$min_points_uq <- 3
 formals(prep_cont_IE_analyses)$reduce_columns <- T
+formals(prep_cont_IE_analyses)$replace_zeroes <- T
+formals(prep_cont_IE_analyses)$permute_y <- F
 
 
 #' Compile overview for the combination of a set of IE analysis
@@ -970,6 +1084,7 @@ prep_continuous_param_grid <- function(
   ncores = 16,
 	z_normalize = F,
   ds_frac = NULL,
+  permute_id = NULL,
   stats_idx = 1,
   return_res = F,
   overlap_var = 'mean_score',
@@ -985,6 +1100,7 @@ prep_continuous_param_grid <- function(
       LOH_HLA = LOH_HLA,
       ds_frac = ds_frac,
       z_normalize = z_normalize,
+      permute_id = permute_id,
       analysis_name = analysis_name,
       analysis_idx = analysis_idx,
       patient_inclusion_crit = patient_inclusion_crit,
@@ -1130,6 +1246,7 @@ compile_all_coef_overview <- function(
   analysis_idxs = main_analysis_idxs,
   z_normalize = F,
   hla_alleles = focus_hlas,
+  permute_id = NULL,
   focus_settings = NULL,
   check_data_availability = T,
   include_non_ds_tallies = (idxs_name != 'main_analysis')) {
@@ -1152,6 +1269,7 @@ compile_all_coef_overview <- function(
       {make_flag(ds_frac)}\\
       {make_flag(iter)}\\
       {make_flag(include_non_ds_tallies)}\\
+      {make_flag(permute_id)}\\
       .rds'))
 
   if (!IE_requires_computation(all_coef_fn) && !redo &&
@@ -1244,6 +1362,7 @@ compile_all_coef_overview <- function(
       analysis_idxs = analysis_idxs,
       # hla_sim_range = hla_sim_range,
       redo = redo_subanalyses,
+      permute_id = permute_id,
       ds_frac = ds_frac,
       ncores = ncores,
       reg_method = reg_method,
@@ -1609,7 +1728,6 @@ assess_coef_composition <- function(dtf) {
 
 perform_filter_coef_overview <- function(dtf, code,
   print_messages = T) {
-
   code <- rlang::enquo(code)
   comp_before <- assess_coef_composition(dtf)
   bools <- rlang::eval_tidy(code, data = dtf)
@@ -2148,7 +2266,8 @@ pick_representative_allele <- function(dtf,
       setdiff('focus_allele') %>%
       c('analysis_idx', 'project_extended')
     rc_sel <-
-      dtf[, cbind(.SD[order(rc)][max(ceiling(.N / 2), 1)], 'N_alleles' = .N),
+      dtf[, cbind(.SD[order(rc)][max(ceiling(.N / 2), 1)], 
+        'N_alleles' = .N),
           keyby = analysis_id_cols]
   }
   N_unique_alleles <- length(unique(dtf$focus_allele))
@@ -2163,7 +2282,8 @@ pick_representative_allele <- function(dtf,
 
 
 group_and_count_alleles <- function(dtf, sort_var = 'depletion_max') {
-  res <- dplyr::group_by(dtf, overlap_var, patient_inclusion_crit, LOH_HLA,
+  res <- dplyr::group_by(dtf, 
+    overlap_var, patient_inclusion_crit, LOH_HLA,
     analysis_name, analysis_idx, project_extended) %>%
     dplyr::filter(!is.na(.data[[sort_var]])) %>%
     dplyr::mutate(N_alleles = uniqueN(focus_allele))
