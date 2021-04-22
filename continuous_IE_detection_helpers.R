@@ -1,5 +1,5 @@
 IE_requires_computation <- mod_time_comparator(
-  minimum_mod_time = '2021-4-07 09:58', verbose = TRUE)
+  minimum_mod_time = '2021-4-21 22:36', verbose = TRUE)
 
 ## {{{ Constants
 scalar_analysis_components <- c('test_yr', 'p_val', 'p_val_no_reg',
@@ -248,7 +248,7 @@ determine_continuous_IE_yval <- function(dtf, replace_zeroes = T) {
     .[1]
   i_name <- gsub('c_(.*)', 'i_\\1', c_name)
   if (!is.na(c_name) && c_name != 'NA') {
-    num <- dplyr::pull(dtf, c_name) 
+    num <- dplyr::pull(dtf, c_name)
     denum <- dplyr::pull(dtf, i_name)
     dtf$y_var <- num / denum
     if (replace_zeroes) {
@@ -286,6 +286,24 @@ if (F) {
 
 make_names_df_friendly <- function(v) {
   tolower(gsub('\\.|\\s', '_', v))
+}
+
+
+ds_ol_stats <- function(dtf) {
+  dtf$ol_b <- cut(dtf$ol, seq(0, 1, by = .1), labels = F)
+  # h_dist <- table(dtf$ol_b)
+  # h_dist <- set_names(h_dist, paste('d_', names(h_dist), sep = ''))
+  h_stats <- dtf %>%
+    group_by(ol_b) %>%
+    dplyr::mutate(
+      w_i = sum(i, na.rm = T),
+      w_c = sum(c, na.rm = T),
+      w_y_var = w_c / w_i
+    ) %>%
+    summarize(n = n(), across(c(w_y_var, w_i, w_c, y_var, i, c),
+      c('median' = median, 'mad' = mad))) %>%
+    dplyr::select(!matches('w_.*mad'))
+  return(h_stats)
 }
 
 
@@ -356,55 +374,173 @@ compute_continuous_IE_statistics <- function(
   }
   lm_results <- purrr::map(p_dtf, f)
 
-  ## Append Wilcoxon-test results
-  wilcox_results <- purrr::map(p_dtf, fit_wilcox_model)
-  out <- purrr::map(seq(p_dtf),
-    ~c(lm_results[[.x]], wilcox_results[[.x]])
-  )
+  if (!grepl('wilcox', reg_method)) {
+    ## Append Wilcoxon-test results if that's not all that was asked
+    ## for
+    wilcox_results <- purrr::map(p_dtf, fit_wilcox_model)
+    out <- purrr::map(seq(p_dtf),
+      ~c(lm_results[[.x]], wilcox_results[[.x]])
+    )
+  }
+
   return(out)
 }
 
 
 fit_wilcox_model <- function(dtf) {
   if (is.null(dtf)) return(NULL)
-  dtf[, 'ol_quartile' :=  cut(ol, breaks = seq(0, 1, by = .25))]
-  dtf[as.integer(ol_quartile) %in% c(1, 4)]
-  wc <- suppressWarnings(wilcox.test(y_var ~ ol_quartile,
-    data = dtf[as.integer(ol_quartile) %in% c(1, 4)]))
+  setDT(dtf)[, 'ol_quartile' := cut(ol, breaks = seq(0, 1, by = .25))]
+  dtf <- dtf[as.integer(ol_quartile) %in% c(1, 4)]
+
+  wc <- tryCatch(
+    suppressWarnings(wilcox.test(y_var ~ ol_quartile,
+        data = dtf, conf.int = T)),
+    error = function(e) { NULL })
+  if (is.null(wc)) return(NULL)
+
   return(list(
+    'wilcox_estimate' = unname(wc$estimate),
+    'wilcox_ci_l' = wc$conf.int[1],
+    'wilcox_ci_h' = wc$conf.int[2],
+    'wilcox_p' = wc$p.value,
+    'wilcox_n_patients' = dtf[, .N],
+    'wilcox_n_patients_l' = dtf[as.integer(ol_quartile) == 1, .N],
+    'wilcox_n_patients_h' = dtf[as.integer(ol_quartile) == 4, .N],
     'wilcox_stat' = unname(wc$statistic),
-    'wilcox_p' = wc$p.value
+    'wilcox_method' = wc$method
   ))
+}
+
+
+fit_weighted_t_test  <- function(dtf) {
+  if (is.null(dtf)) return(NULL)
+  setDT(dtf)[, 'ol_quartile' :=  cut(ol, breaks = seq(0, 1, by = .25))]
+  dtf <- dtf[as.integer(ol_quartile) %in% c(1, 4)]
+
+  test <- tryCatch(weights::wtd.t.test(
+    x = dtf[as.integer(ol_quartile) == 1, y_var],
+    y = dtf[as.integer(ol_quartile) == 4, y_var],
+    weight = dtf[as.integer(ol_quartile) == 1, c],
+    weighty = dtf[as.integer(ol_quartile) == 4, c],
+    samedata = FALSE
+  ), error = function(e) { NULL })
+
+  if (is.null(test)) return(NULL)
+
+  out <- unlist(test[c('coefficients', 'additional')])
+  names(out) <- names(out) %>%
+    str_replace_all('\\.', '_') %>%
+    str_replace_all(' ', '') %>%
+    tolower %>%
+    { paste('wt_', ., sep = '') }
+
+  return(out)
+}
+
+
+rlm_high_TMB_patients <- function(...) {
+  # dots <- as.list(...)
+  # fit_rlm_model(..., remove_low_TMB_patients = F)
+  fit_rlm_model(..., debug = T, remove_low_TMB_patients = T)
 }
 
 
 #' Fit robust regression model with Huber error model
 #'
 #'
-fit_rlm_model <- function(dtf, perform_sanity_checks = F, 
-  weighted = T) {
-  if (!test_data_sufficiency(dtf)) return(NULL)
+fit_rlm_model <- function(dtf, perform_sanity_checks = F,
+  weighted = T, include_lm = F, remove_low_TMB_patients = T,
+  debug = F, N_perms = 1000) {
 
-  unnormalized_mod <- fit_rlm_(dtf, weighted = weighted, 
+  if (null_dat(dtf)) return(NULL) 
+  start_time <- Sys.time()
+  if (!test_data_sufficiency(dtf))
+    return(tibble_row(message = 'data_insufficient'))
+
+  if (remove_low_TMB_patients) {
+    l_dtf <- filter_low_TMB_patients(dtf)
+    nz_report <- attr(l_dtf, 'nz_report')
+
+    if (!test_data_sufficiency(l_dtf)) {
+      return(
+        tibble_row(message = 'data_insufficient_after_NZ_filtering'))
+    }
+  } else {
+    l_dtf <- dtf
+    nz_report <- list()
+  }
+
+  unnormalized_mod <- fit_rlm_(l_dtf, weighted = weighted,
     simple_output = T)
-  if (is.null(unnormalized_mod)) return(NULL)
+  if (is.null(unnormalized_mod))
+    return(tibble_row(message = 'rlm_model_fit_failed'))
 
   orig_pars <- coef(unnormalized_mod) %>%
     as.list %>% setNames(c('intercept', 'rc'))
-  
-  pre_trans_scale_avg_norm <- 
+
+  pre_trans_scale_avg_norm <-
     unnormalized_mod$s / median(dtf$y_var, na.rm = T)
 
-  dtf$y_var <- dtf$y_var / orig_pars[['intercept']]
-  normalized_mod <- fit_rlm_(dtf, weighted = weighted, 
-    simple_output = F)
+  l_dtf$y_var <- l_dtf$y_var / orig_pars[['intercept']]
+  normalized_mod <- fit_rlm_(l_dtf, weighted = weighted,
+    simple_output = F, include_lm = F)
+
+  if (!is.null(N_perms) && N_perms > 0) {
+    perm_res <- map_dfr(1:N_perms, function(n) {
+      ord <- sample(1:nrow(l_dtf))
+      p_dtf <- l_dtf[, .(ol = ol[ord], c, i, y_var)]
+      p_unnormalized_mod <- fit_rlm_(p_dtf, weighted = weighted,
+        simple_output = T)
+      p_dtf$y_var <- p_dtf$y_var / coef(p_unnormalized_mod)[1]
+      fit_rlm_(p_dtf, include_lm = F)
+    })
+
+    num_cols <- map_lgl(perm_res, is.numeric) %>%
+      which %>% names %>% { . }
+
+    perm_stats <- perm_res %>%
+      dplyr::select(any_of(num_cols)) %>%
+      summarise(across(everything(),
+          c('median' = median, 'mad' = mad), na.rm = T)) %>%
+      { . }
+
+    for (cn in num_cols) {
+      acn <- glue('{cn}_pq')
+      perm_stats[[acn]] <-
+        mean(normalized_mod[[cn]] >= perm_res[[cn]])
+    }
+
+    for (cn in c('delta_mean', 'delta_CI_l', 'delta_CI_h')) {
+      ccn <- glue('{cn}_pc')
+      perm_stats[[ccn]] <-
+        normalized_mod[[cn]] - median(perm_res[[cn]])
+    }
+
+    # hist(perm_res$delta_mean, breaks = 1000)
+    delta_mean_sum <- summary(perm_res$delta_mean) %>%
+      set_names(gsub('\\.| ', '', tolower(names(.))))
+    d1 <- abs(delta_mean_sum['median'] - delta_mean_sum['1stqu'])
+    d2 <- abs(delta_mean_sum['median'] - delta_mean_sum['3rdqu'])
+    ## The scale in which the median operates
+    med_scale <- floor(log10(abs(delta_mean_sum['median'])))
+    ## Test whether
+    perm_stats[['symmetry_test']] <-
+      maartenutils::eps(d1, d2, 10^med_scale)
+
+    perm_stats <- perm_stats %>%
+      set_names(paste('perm', names(.), sep = '_')) %>%
+      { . }
+    # print(perm_stats, width = 3000)
+  } else {
+    perm_stats <- list()
+  }
 
   if (perform_sanity_checks) {
-    trans_test <- 
-      (abs(pre_trans_scale_avg_norm) == Inf && 
+    trans_test <-
+      (abs(pre_trans_scale_avg_norm) == Inf &&
       abs(normalized_mod$scale_avg_norm) == Inf) ||
       maartenutils::eps(
-        pre_trans_scale_avg_norm, 
+        pre_trans_scale_avg_norm,
         normalized_mod$scale_avg_norm, 1e-3)
     browser(expr = !trans_test)
     stopifnot(trans_test)
@@ -416,30 +552,41 @@ fit_rlm_model <- function(dtf, perform_sanity_checks = F,
     stopifnot(trans_test)
   }
 
-  # stats
-
-  out <- normalized_mod %>% 
+  out <- normalized_mod %>%
+    modifyList(list(message = 'OK')) %>%
     modifyList(orig_pars) %>%
     ## Ensure scale_avg_norm is not affected by 1/intercept scaling
     ## in any way
-    modifyList(list('scale_avg_norm' = pre_trans_scale_avg_norm))
+    modifyList(list('scale_avg_norm' = pre_trans_scale_avg_norm)) %>%
+    modifyList(perm_stats) %>%
+    map(unname)
+
+  # if (abs(out$delta_mean) > .1 && debug) {
+  #   browser()
+  # }
+  # h_dist <- ds_ol_stats(l_dtf)
+  # print_plot(with(h_dist, plot(ol_b, w_y_var_median)))
+
+  end_time <- Sys.time()
+  out$elapsed_time <- format(end_time - start_time, format = '%M')
 
   return(out)
 }
 
 
-fit_rlm_ <- function(dtf, simple_output = F, include_AFDP = F, 
-  weighted = T) {
+fit_rlm_ <- function(dtf, simple_output = F, include_AFDP = F,
+  weighted = T, include_lm = !simple_output) {
   dtf <- setDT(dtf)[is.finite(y_var) & is.finite(ol)]
 
   lc <- tryCatch(suppressWarnings(
       MASS::rlm(
-        formula = y_var ~ ol, 
+        formula = y_var ~ ol,
         weights = if (weighted) dtf$weight else NULL,
         data = dtf,
         wt.method = 'case',
         x.ret = T, model = T, maxit = 1000)),
     error = function(e) { NULL })
+
   if (simple_output) {
     return(lc)
   }
@@ -452,30 +599,31 @@ fit_rlm_ <- function(dtf, simple_output = F, include_AFDP = F,
     { setNames(., paste('NMADR_q', 100 * ., sep = '')) }
 
   if (is.null(lc)) {
-    delta_def <- map(auto_name(delta_names), ~NA_real_)
-    NMADR_def <- map(NMADR_eval_locs, ~NA_real_)
-    out <- list(
-      'intercept' = NA_real_,
-      'p_val_intercept' = NA_real_,
-      'rc' = NA_real_,
-      'p_val' = NA_real_,
-      'df' = NA_real_,
-      't_val' = NA_real_,
-      'n_patients' = dtf[, .N],
-      'converged' = F,
-      'yr_fractional_change' = NA_real_,
-      'scale' = NA_real_,
-      'scale_avg_norm' = NA_real_,
-      'norm_scale' = NA_real_
-    ) %>% c(delta_def) %>% c(NMADR_def)
+    # delta_def <- map(auto_name(delta_names), ~NA_real_)
+    # NMADR_def <- map(NMADR_eval_locs, ~NA_real_)
+    # out <- list(
+    #   'message' = 'model_fit_failed',
+    #   'intercept' = NA_real_,
+    #   'p_val_intercept' = NA_real_,
+    #   'rc' = NA_real_,
+    #   'p_val' = NA_real_,
+    #   'df' = NA_real_,
+    #   't_val' = NA_real_,
+    #   'n_patients' = dtf[, .N],
+    #   'converged' = F,
+    #   'yr_fractional_change' = NA_real_,
+    #   'scale' = NA_real_,
+    #   'scale_avg_norm' = NA_real_,
+    #   'norm_scale' = NA_real_
+    # ) %>% c(delta_def) %>% c(NMADR_def)
 
-    if (include_AFDP) {
-      AFDP_def <- map(quants, ~NA_real_) %>%
-        setNames(paste0('AFDP_', 100*quants, sep = ''))
-      out <- c(out, AFDP_def)
-    }
-     
-    return(out)
+    # if (include_AFDP) {
+    #   AFDP_def <- map(quants, ~NA_real_) %>%
+    #     setNames(paste0('AFDP_', 100*quants, sep = ''))
+    #   out <- c(out, AFDP_def)
+    # }
+    # return(out)
+    return(list('message' = 'model_fit_failed'))
   }
 
   coef_mat <- summary(lc)$coefficients
@@ -487,8 +635,17 @@ fit_rlm_ <- function(dtf, simple_output = F, include_AFDP = F,
     'df' = summary(lc)$df[1:nrow(coef_mat)]
   )
 
-  delta <- predict(lc,
-    newdata = data.frame(ol = 1), se.fit = T)
+  if (is.null(coef_mat[2,1]) || is.na(coef_mat[2,1])) {
+    browser()
+  }
+
+  delta <- tryCatch(
+    predict(lc, newdata = data.frame(ol = 1), se.fit = T),
+    error = function(e) { NULL })
+  if (is.null(delta)) {
+    return(list(message = 'predict_step_failed'))
+  }
+
   delta <- { delta$fit + c(-1.96, 0, 1.96) * delta$se.fit - 1 } %>%
     as.list() %>%
     append(list(delta$se.fit)) %>%
@@ -509,7 +666,7 @@ fit_rlm_ <- function(dtf, simple_output = F, include_AFDP = F,
       norm_scale, NMADR_probs[['NMADR_q50']], 1e-3))
 
   out <- list(
-    'lm' = lc,
+    'message' = 'OK',
     'intercept' = coef_mat[1, 1],
     'p_val_intercept' = coef_mat[1, 4],
     'rc' = coef_mat[2, 1],
@@ -521,8 +678,11 @@ fit_rlm_ <- function(dtf, simple_output = F, include_AFDP = F,
     'yr_fractional_change' = coef_mat[2, 1] / coef_mat[1, 1],
     'scale' = lc$s,
     'scale_avg_norm' = lc$s / median(dtf$y_var),
-    'norm_scale' = norm_scale 
+    'norm_scale' = norm_scale
   ) %>% c(delta) %>% c(NMADR_probs)
+
+  if (include_lm)
+    out <- append(list('lm' = lc))
 
   if (include_AFDP) {
     ## Compute absolute fractional difference between predictions
@@ -536,89 +696,217 @@ fit_rlm_ <- function(dtf, simple_output = F, include_AFDP = F,
       setNames(paste0('AFDP_', 100*quants, sep = ''))
     out <- c(out, AFDP_stats)
   }
+
   return(out)
 }
 
 
-fit_dropout_aware_nb <- function(dtf, remove_outliers = F) {
-  # fit_mod = function(x) 
-  #   glm(c ~ 1 + i + i:ol, data = x, family = poisson())
-  # fit_mod = function(x) MASS::glm.nb(c ~ 1 + i + i:ol, data = x)
-  # fit_mod = function(x) MASS::glm.nb(c ~ 0 + i + i:ol, data = x,
-  #   control = glm.control(maxit = 1000))
-  # fit_mod = function(x) MASS::glm.nb(c ~ 0 + i + ol, data = x,
-  #   control = glm.control(maxit = 1000))
-  # fit_mod = function(x) MASS::glm.nb(c ~ 1 + i + ol + i:ol, data = x,
-  #   control = glm.control(maxit = 1000))
-
-  fit_mod = function(x) MASS::glm.nb(c ~ 1 + i + ol, data = x,
+fit_nb_mod = function(x, formula) {
+  tryCatch(suppressWarnings(
+    MASS::glm.nb(formula, data = x,
     control = glm.control(maxit = 1000))
-  fit_nz_mod = function(x) MASS::glm.nb(c ~ 1 + i, data = x,
-    control = glm.control(maxit = 1000))
-
-  ## PHASE 1: subselect patients that have a fighting chance of getting
-  ## at least one neo-antigen with the current filtering settings
-  # l_dtf$c_q <- l_dtf$c / max(l_dtf$c)
-  # l_dtf$i_q <- l_dtf$i / max(l_dtf$i)
-  dtf$i <- round(dtf$i)
-  dtf$c <- round(dtf$c)
-  nz_mod <- fit_nz_mod(dtf)
-  # test_plot({ par(mfrow = c(2, 2)); plot(nz_mod) }, w = 17.4, h = 20)
-  ## Test how many variants are needed for 0 expected mutations
-  min_req_muts <- coef(nz_mod) %>% 
-    { -1 * .['(Intercept)'] / .['i'] } %>%
-    unname
-  l_dtf <- dtf[i > min_req_muts, ]
-  if (!test_data_sufficiency(l_dtf)) {
-    return(NULL)
-  }
-
-  ## PHASE 2: fit model to all sufficiently mutated patients
-  mod <- fit_mod(l_dtf)
-  # test_plot({ par(mfrow = c(2, 2)); plot(mod) }, w = 17.4, h = 20)
-  cooks <- NULL
-  i <- 0
-  while (remove_outliers && nrow(l_dtf) > 0 && is.null(cooks)) {
-    i <- i + 1
-    cooks <- cooks.distance(mod)
-    if (!is.null(cooks)) {
-      cooks_thresh <- quantile(cooks, .975)
-      allowed <- which(cooks.distance(mod) < cook_thresh)
-      l_dtf <- l_dtf[allowed, ]
-    }
-    mod <- fit_mod(l_dtf)
-    # test_plot(hist(cooks, breaks = 100))
-  }
-
-  ## Another, exact, option would be 'ray-scanning'
-  ## https://nl.mathworks.com/matlabcentral/fileexchange/84973-integrate-and-classify-normal-distributions
-  N_mut = median(dtf$i)
-  delta <- mvtnorm::rmvnorm(1e5, 
-      mean = coef(mod), sigma = vcov(mod)
-    ) %>% { 
-    base <- .[, 1] + .[, 2] * N_mut;
-    (.[, 3]) / base 
-  } %>%
-  { c('delta_median' = median(.), 'delta_mad' = mad(.)) }
-  
-  # fit_rlm_model(dtf)
-  # summary(nz_mod)
-  tibble_row(
-    delta_median = delta[1],
-    delta_mad = delta[2],
-    # delta_AIC = AIC(mod),
-    cleaning_i = i,
-    dropped_pts = nrow(dtf) - nrow(l_dtf),
-    n_patients = nrow(dtf),
-    nz_intercept = coef(nz_mod)[1],
-    nz_rc = coef(nz_mod)[2],
-    nz_theta = nz_mod$theta,
-    theta = mod$theta
-  ) %>% return
+  ), error = function(e) { NULL })
 }
 
 
-fit_lm_model <- function(dtf) {
+filter_low_TMB_patients <- function(dtf) {
+  ## Subselect patients that have a fighting chance of getting at
+  ## least one neo-antigen with the current filtering settings. Use
+  ## a simple model to estimate that TMB threshold
+  if (null_dat(dtf)) return(NULL)
+  dtf$i <- round(dtf$i)
+  dtf$c <- round(dtf$c)
+  # dtf$c_q <- dtf$c / max(dtf$c)
+  # dtf$i_q <- dtf$i / max(dtf$i)
+  nz_mod <- fit_nb_mod(dtf, c ~ 1 + i)
+  # test_plot({ par(mfrow = c(2, 2)); plot(nz_mod) }, w = 17.4, h = 20)
+
+  ## Test how many variants are needed for 1 (0 on the log scale of
+  ## the coefficients) expected mutation
+  min_req_muts <- coef(nz_mod) %>%
+    { -1 * .['(Intercept)'] / .['i'] } %>%
+    unname
+  l_dtf <- dtf[i > min_req_muts, ]
+
+  nz_report <- list(
+    nz_converged = nz_mod$converged,
+    nz_intercept = coef(nz_mod)[1],
+    nz_rc = coef(nz_mod)[2],
+    nz_theta = nz_mod$theta
+  )
+  attr(dtf, 'nz_report') <- nz_report
+  return(dtf)
+}
+
+
+fit_dropout_aware_nb <- function(
+  dtf,
+  remove_low_TMB_patients = T,
+  remove_outliers = F,
+  N_draws = 1e3,
+  draw_res = 1e2,
+  verbose = F) {
+
+  time_start <- Sys.time()
+
+  if (remove_low_TMB_patients) {
+    l_dtf <- filter_low_TMB_patients(dtf)
+    nz_report <- attr(l_dtf, 'nz_report')
+
+    if (is.null(l_dtf)) return(tibble_row(message = 'NZ_failed'))
+    if (!test_data_sufficiency(l_dtf)) {
+      return(
+        tibble_row(message = 'data_insufficient_after_NZ_filtering')
+      )
+    }
+  } else {
+    l_dtf <- dtf
+    nz_report <- list()
+  }
+
+  ## PHASE 1.5 remove outlying patients. Not all that necessary
+  ## because of the IWLS in glm.nb
+  # test_plot({ par(mfrow = c(2, 2)); plot(mod) }, w = 17.4, h = 20)
+  if (remove_outliers) {
+    start_n <- nrow(l_dtf)
+    prev_n <- NULL
+    i <- 0
+    while ((is.null(prev_n) || prev_n != nrow(l_dtf)) && i <= 10) {
+      prev_n <- nrow(l_dtf)
+      m3 <- fit_nb_mod(l_dtf, c ~ 1 + i + ol + i:ol)
+      if (is.null(m3)) return(tibble_row(
+          message = 'remove_outlying_patients_failed'))
+      l_dtf <- l_dtf[abs(studres(m3)) < 3, ]
+      i <- i + 1
+    }
+    outlying_pts <- start_n - prev_n
+    # cooks <- NULL
+    # i <- 0
+    # while (nrow(l_dtf) > 0 && is.null(cooks)) {
+    #   i <- i + 1
+    #   cooks <- cooks.distance(mod)
+    #   if (!is.null(cooks)) {
+    #     cooks_thresh <- quantile(cooks, .975)
+    #     allowed <- which(cooks.distance(mod) < cook_thresh)
+    #     l_dtf <- l_dtf[allowed, ]
+    #   }
+    #   mod <- fit_nb_mod(l_dtf)
+    #   # test_plot(hist(cooks, breaks = 100))
+    # }
+    # if (!test_data_sufficiency(l_dtf)) {
+    #   return(NULL)
+    # }
+  } else {
+    i <- 0
+    outlying_pts <- 0
+  }
+
+  ## PHASE 2: test correlation between i and i:ol, strong enough for
+  ## inclusion?
+  mods <-
+    list(
+      c ~ 1 + i + ol,
+      # c ~ 1 + i + i:ol,
+      c ~ 1 + i + ol + i:ol
+    ) %>% map(fit_nb_mod, x = l_dtf)
+  mods <- mods[!sapply(mods, is.null)]
+  if (length(mods) == 0) return(tibble_row(
+      message = 'fit_full_models_failed'))
+
+  if (F) {
+    test_plot(plot(l_dtf$c, predict(m3)), w = 20, h = 20)
+    # test_plot({ par(mfrow = c(2, 2)); plot(m3) }, w = 17.4, h = 20)
+    summary(residuals(mods[[1]]))
+    summary(residuals(mods[[2]]))
+    summary(residuals(m3))
+    cor(studres(mods[[1]]), studres(mods[[2]]))
+    cor(studres(mods[[2]]), studres(m3))
+    cor(studres(mods[[1]]), studres(m3))
+    test_plot(hist(studres(m3)), w = 20, h = 20)
+  }
+
+  AICs <- map_dbl(mods, AIC)
+  pref_mod <- which.min(AICs)
+  ## Compute relative likelihood of models
+  ## https://en.wikipedia.org/wiki/Akaike_information_criterion
+  rel_lik <- exp((AICs[pref_mod] - AICs) / 2) %>% { . / sum(.) }
+  # corM <- cov_to_cor(vcov(mods[[2]]))
+
+  N_mut = median(dtf$i)
+
+  ## PHASE 3: fit model to all sufficiently mutated patients
+  ## Transform random draws to quantity of interest, delta, using
+  ## random sampling from parameter distribution
+  ## Compare h = 1 and h = 0 for a median number of mutations
+  ## h = ol in code
+
+  ## Another, exact, option would be 'ray-scanning'
+  ## https://nl.mathworks.com/matlabcentral/fileexchange/84973
+  ## -integrate-and-classify-normal-distributions
+
+  delta_1 <- mvtnorm::rmvnorm(
+      n = min(draw_res^3, N_draws), mean = coef(mods[[1]]),
+      sigma = vcov(mods[[1]])
+    ) %>% {
+      base <- .[,'(Intercept)'] + .[, 'i'] * N_mut; .[, 'ol'] / base
+    } %>% {
+      c('delta_median' = median(.), 'delta_mad' = mad(.))
+    }
+
+  # delta_2 <- mvtnorm::rmvnorm(
+  #     n = min(draw_res^3, N_draws),
+  #     mean = coef(mods[[2]]), sigma = vcov(mods[[2]])
+  #   ) %>% {
+  #     base <- .[, '(Intercept)'] + .[, 'i'] * N_mut;
+  #     (.[, 'i:ol'] * N_mut) / base
+  #   } %>% {
+  #     c('delta_median' = median(.), 'delta_mad' = mad(.))
+  #   }
+
+  delta_3 <- mvtnorm::rmvnorm(
+      n = min(draw_res^4, N_draws), mean = coef(mods[[2]]),
+      sigma = vcov(mods[[2]])
+    ) %>%
+    {
+      base <- .[, '(Intercept)'] + .[, 'i'] * N_mut;
+      (.[, 'ol'] + .[, 'i:ol'] * N_mut) / base
+    } %>%
+    { c('delta_median' = median(.), 'delta_mad' = mad(.)) }
+
+  delta <- weighted.mean(c(delta_1[1], delta_3[1]), rel_lik)
+  delta_mad <- weighted.mean(c(delta_1[2], delta_3[2]), rel_lik)
+
+  rlm_delta <- fit_rlm_model(l_dtf, include_lm = include_lm)
+
+  out <- tibble_row(
+    message = 'OK',
+    delta = delta,
+    delta_mad = delta_mad,
+    mod1_converged = mods[[1]]$converged,
+    # mod2_converged = mods[[2]]$converged,
+    mod3_converged = mods[[2]]$converged,
+    aic1 = AICs[1],
+    # aic2 = AICs[2],
+    aic3 = AICs[2],
+    aic_confidence1 = rel_lik[1],
+    # aic_confidence2 = rel_lik[2],
+    aic_confidence3 = rel_lik[2],
+    cleaning_i = i,
+    dropped_pts = nrow(dtf) - nrow(l_dtf),
+    low_tmb_pts = nrow(dtf) - nrow(l_dtf) + outlying_pts,
+    outlying_pts = outlying_pts,
+    theta1 = mods[[1]]$theta,
+    # theta2 = mods[[2]]$theta,
+    theta3 = mods[[2]]$theta
+  ) %>% append(nz_report) %>% append(rlm_delta)
+
+  stopifnot(!any(duplicated(names(out))))
+
+  return(out)
+}
+
+
+fit_lm_model <- function(dtf, include_lm = F) {
   dtf <- dtf[is.finite(y_var) & is.finite(ol)]
 
   lc <- tryCatch(lm(y_var ~ ol, data = dtf),
@@ -627,7 +915,7 @@ fit_lm_model <- function(dtf) {
   if (is.null(lc) || dim(coef_mat)[1] == 1) return(NULL)
 
   res <- list(
-    'lm' = lc,
+    # 'lm' = lc,
     'intercept' = coef_mat[1, 1],
     'p_val_intercept' = coef_mat[1, 4],
     'rc' = tryCatch(coef_mat[2, 1], error = function(e) { browser() }),
@@ -719,7 +1007,7 @@ get_repertoire_overlap <- function(ro = NULL, hla_alleles = 'A0201',
 
 
 recover_tumor_type <- function(
-  tumor_type = NULL, 
+  tumor_type = NULL,
   project_extended = NULL) {
   if (!is.null(tumor_type) && tumor_type %in% tumor_types) {
     return(tumor_type)
@@ -755,10 +1043,11 @@ test_continuous_IE <- function(
   check_res = F,
   partition_vars = c(),
   stats_idx = 1,
+  skip_missing = F,
   verbose = F,
   include_call = F,
   ds_frac = NULL,
-  return_res = T,
+  return_res = TRUE,
   debug = F) {
 
   ## No point in doing an intercept vs. slope comparison as is being
@@ -788,14 +1077,17 @@ test_continuous_IE <- function(
   )
 
   ## Don't cache downsampled/permuted sub-analyses
-  if (is.null(permute_id) && is.null(ds_frac) && 
-      !IE_requires_computation(o_fn) &&
-      !redo && !check_res) {
+  if (skip_missing ||
+      (is.null(permute_id) && is.null(ds_frac) &&
+       !IE_requires_computation(o_fn, verbose = F) &&
+       !redo && !check_res)) {
     if (return_res) {
-      ret_val <- tryCatch(
-        readRDS(o_fn),
-        error = function(e) { file.remove(o_fn); NULL })
-      if (!is.null(ret_val)) return(ret_val)
+      ret_val <- tryCatch(readRDS(o_fn),
+        warning = function(w) {},
+        error = function(e) {
+          if (!skip_missing) file.remove(o_fn); NULL
+        })
+      return(ret_val)
     } else {
       return(NULL)
     }
@@ -884,7 +1176,7 @@ wrapper_plot_repertoire_overlap_vs_yield_rate <- function(
     stop('Compute test object with include_call = TRUE')
   }
 
-  reg_plots <- plyr::llply(maartenutils::auto_name(projects), 
+  reg_plots <- plyr::llply(maartenutils::auto_name(projects),
     function(pe) {
     data_subs <- subset_project(attr(test_object, 'prep')$dtf, pe,
       pan_can_includes_all = TRUE)
@@ -937,7 +1229,7 @@ prep_cont_IE_analyses <- function() {
     quickMHC::ppHLA(focus_allele))
 
   atts <- attributes(dtf)
-  dtf <- determine_continuous_IE_yval(dtf, 
+  dtf <- determine_continuous_IE_yval(dtf,
     replace_zeroes = replace_zeroes)
 
   ## Extract the  tumor projects present in this object
@@ -961,8 +1253,8 @@ prep_cont_IE_analyses <- function() {
       any(patient_inclusion_crit != 'none')) {
     dtf <- setDT(dtf)
     FDR_thresh <- switch(patient_inclusion_crit,
-      'strict_TR' = .01, 'TR' = .1, 
-      'FDR10' = .1, 'FDR1' = .01, 
+      'strict_TR' = .01, 'TR' = .1,
+      'FDR10' = .1, 'FDR1' = .01,
       'FDR0.1' = 0.001, 'FDR0.01' = 0.0001,
       'lenient' = 0.0001, 'moderate' = 0.01, 'stringent' = .1
     )
@@ -1047,8 +1339,8 @@ prep_cont_IE_analyses <- function() {
     'h_dist' = h_dist,
     'obj_fn' = obj_fn,
     'patient_counts' = c(
-      'start' = start_N, 
-      'valid_h' = valid_h_N, 'valid_y' = valid_y_N, 
+      'start' = start_N,
+      'valid_h' = valid_h_N, 'valid_y' = valid_y_N,
       'final' = dtf[, .N])
   )
   return(out)
@@ -1088,6 +1380,7 @@ prep_continuous_param_grid <- function(
   stats_idx = 1,
   return_res = F,
   overlap_var = 'mean_score',
+  skip_missing = F,
   plot_ranges = NULL,
   ...) {
 
@@ -1103,6 +1396,7 @@ prep_continuous_param_grid <- function(
       permute_id = permute_id,
       analysis_name = analysis_name,
       analysis_idx = analysis_idx,
+      skip_missing = skip_missing,
       patient_inclusion_crit = patient_inclusion_crit,
       overlap_var = overlap_var
     )
@@ -1155,7 +1449,7 @@ prep_continuous_param_grid <- function(
     ret_val <- tryCatch(rbindlist(IE_tests, fill = T) %>%
       .[, 'project_extended' := projects] %>%
       .[, 'analysis_idx' := analysis_idx],
-      error = function(e) { print(e); NULL })
+      error = function(e) { print(e); browser(); NULL })
     return(ret_val)
   }, .parallel = (ncores > 1)) %>% rbindlist(fill = T)
 
@@ -1248,7 +1542,9 @@ compile_all_coef_overview <- function(
   hla_alleles = focus_hlas,
   permute_id = NULL,
   focus_settings = NULL,
-  check_data_availability = T,
+  check_data_availability = F,
+  skip_missing = F,
+  N_downsample_settings = NULL,
   include_non_ds_tallies = (idxs_name != 'main_analysis')) {
 
   fa_flag <- paste0('-focus_hlas_', paste(hla_alleles,
@@ -1273,7 +1569,8 @@ compile_all_coef_overview <- function(
       .rds'))
 
   if (!IE_requires_computation(all_coef_fn) && !redo &&
-      is.null(focus_settings)) {
+      is.null(focus_settings) && !skip_missing &&
+      is.null(N_downsample_settings)) {
     return(
       format_overview_res(
         dtf = readRDS(all_coef_fn),
@@ -1295,6 +1592,12 @@ compile_all_coef_overview <- function(
 
   if (!include_non_ds_tallies) {
     all_settings %<>% filter(analysis_name == 'twoD_sens_analysis')
+  }
+
+  if (!is.null(N_downsample_settings)) {
+    set.seed(1)
+    idxs <- sample(1:nrow(all_settings), N_downsample_settings)
+    all_settings <- all_settings[idxs, ]
   }
 
   if (!is.null(focus_settings)) {
@@ -1365,6 +1668,7 @@ compile_all_coef_overview <- function(
       permute_id = permute_id,
       ds_frac = ds_frac,
       ncores = ncores,
+      skip_missing = skip_missing,
       reg_method = reg_method,
       z_normalize = z_normalize
     )
@@ -1382,7 +1686,8 @@ compile_all_coef_overview <- function(
     return(ret_val)
   }, .parallel = F, .inform = F, .progress = 'text')
 
-  if (is.null(focus_settings)) {
+  if (is.null(focus_settings) && !skip_missing &&
+    is.null(N_downsample_settings)) {
     saveRDS(all_coef_overviews, all_coef_fn)
     mymessage(
       msg = sprintf('Wrote all_coef_overviews to %s', all_coef_fn),
@@ -1470,6 +1775,11 @@ print_overview_stats <- function(dtf, stage_id = '',
     print(dtf[, summary(scale)])
   }
 
+  if ('n_patients' %in% colnames(dtf)) {
+    cat('\nSummary of N patients\n')
+    print(dtf[, summary(n_patients)])
+  }
+
   ## This assumes that all levels are observed
   N_possible_analyses <- dtf %>%
     dplyr::select(focus_allele, overlap_var, patient_inclusion_crit,
@@ -1496,12 +1806,17 @@ print_overview_stats <- function(dtf, stage_id = '',
         (N_possible_analyses / length(focus_hlas)) )
       ), '\n')
 
-  if ('yr_fractional_change' %in% colnames(dtf)) {
+  if (F && 'yr_fractional_change' %in% colnames(dtf)) {
     cat('\nSummary of yr_fractional_change\n')
     print(dtf[, summary(yr_fractional_change)])
   }
 
-  if ('rc' %in% colnames(dtf)) {
+  if ('perm_delta_mean_pc' %in% colnames(dtf)) {
+    cat('\nSummary of perm_delta_mean_pc\n')
+    print(dtf[, summary(perm_delta_mean_pc)])
+  }
+
+  if (F && 'rc' %in% colnames(dtf)) {
     cat('\nSummary of rc\n')
     print(dtf[, summary(rc)])
   }
@@ -1759,7 +2074,9 @@ perform_filter_coef_overview <- function(dtf, code,
         'N.x' = N_before, 'N.y' = N_after,
         log2_fc = overall
       )) %>%
-    dplyr::mutate(fc = 2^log2_fc)
+    dplyr::mutate(fc = 2^log2_fc) %>%
+    dplyr::select(-log2_fc) %>%
+    dplyr::rename(N_before = N.x, N_after = N.y)
 
   # return(list('dtf' = dtf, 'stats' = stats))
   attr(dtf, 'latest_stats') <- stats
@@ -1775,6 +2092,7 @@ filter_coef_overview <- function(
   min_project_size = NULL,
   intercept_filter_p_val = NULL,
   intercept_filter_magnitude = NULL,
+  force_sensible_perm_delta_CI = F,
   norm_scale_filter = NULL,
   scale_avg_norm_filter = NULL,
   delta_SE_filter = NULL,
@@ -1788,11 +2106,6 @@ filter_coef_overview <- function(
   adaptive_NMADR_q75_filter = FALSE,
   adaptive_delta_SE_filter = FALSE,
   adaptive_norm_scale_filter = FALSE) {
-
-  tmp <- dtf[
-    maartenutils::eps(scale, 0, 1e-16) &
-    intercept > 1e-3]
-  if (nrow(tmp) > 0) stop('Implement zero error filtering!')
 
   dtf <- perform_filter_coef_overview(
     dtf = dtf,
@@ -1832,6 +2145,7 @@ filter_coef_overview <- function(
       )
   }
 
+  ## Obviously dubious filter, do not use beyond innocent tests
   if (force_positive_intercept) {
     dtf <- perform_filter_coef_overview(
       print_messages = print_messages,
@@ -1843,6 +2157,36 @@ filter_coef_overview <- function(
         stage_id = 'Force positive intercept'
       )
   }
+
+  any_bool_filter <- ls(pattern = 'scale.*filter') %>%
+    setdiff('norm_scale_filter') %>%
+    map_lgl(~get(.x) %||% F) %>%
+    any()
+  if (any_bool_filter) {
+    tmp <- dtf[
+      maartenutils::eps(scale, 0, 1e-16) &
+      intercept > 1e-2]
+    if (nrow(tmp) > 0) {
+      tmp[, .(delta_mean, n_patients, intercept, scale)]
+      args <- tmp[1] %>% pan_IE_res_to_call_args
+      print_plot(plot_rlm_pick(tmp[1]))
+      stop('Implement zero error filtering!')
+    }
+  }
+
+  if (force_sensible_perm_delta_CI) {
+    dtf <- perform_filter_coef_overview(
+      dtf = dtf,
+      print_messages = print_messages,
+      code = perm_delta_CI_l_median < 0 & perm_delta_CI_h_median > 0
+    )
+    if (print_messages)
+      print_overview_stats(dtf,
+        plot_fishtails = plot_fishtails,
+        stage_id = 'Restrict to sensible permutation CI'
+      )
+  }
+
 
   if (!is.null(delta_SE_filter)) {
     dtf <- perform_filter_coef_overview(
@@ -1941,8 +2285,8 @@ filter_coef_overview <- function(
       dtf[, any(intercept < 0)]) {
     stop('Implement me')
     ## Determine what scale is not tolerable
-    dtf[is.finite(scale_avg_norm) & intercept < 0] 
-    thresh <- dtf[is.finite(scale_avg_norm) & intercept < 0, 
+    dtf[is.finite(scale_avg_norm) & intercept < 0]
+    thresh <- dtf[is.finite(scale_avg_norm) & intercept < 0,
       min(abs(scale_avg_norm))]
     print(thresh)
     dtf <- perform_filter_coef_overview(
@@ -2011,7 +2355,7 @@ filter_coef_overview <- function(
         stage_id = 'After adaptive NMADR_q75 filtering'
       )
   }
-  
+
   if (!is.null(adaptive_delta_SE_filter) &&
       adaptive_delta_SE_filter &&
       dtf[, any(intercept < 0)]) {
@@ -2054,15 +2398,15 @@ filter_coef_overview <- function(
   }
 
   dtf[, tumor_type := tumor_types[as.character(project_extended)]]
-  ## Order projects by mean yr_fractional_change
+  ## Order projects by mean perm_delta_mean_pc
   if (F) {
     pe <- dtf[,
-      wa_var(.SD, varname = 'yr_fractional_change',
+      wa_var(.SD, varname = 'perm_delta_mean_pc',
         error_var = 'norm_scale'),
       by = .(tumor_type, project_extended)] %>%
       .[order(V1), .(project_extended, tumor_type, V1)]
   } else {
-    pe <- dtf[, mean(yr_fractional_change),
+    pe <- dtf[, mean(perm_delta_mean_pc),
       by = .(tumor_type, project_extended)] %>%
       .[order(V1), .(project_extended, tumor_type, V1)]
   }
@@ -2266,7 +2610,7 @@ pick_representative_allele <- function(dtf,
       setdiff('focus_allele') %>%
       c('analysis_idx', 'project_extended')
     rc_sel <-
-      dtf[, cbind(.SD[order(rc)][max(ceiling(.N / 2), 1)], 
+      dtf[, cbind(.SD[order(rc)][max(ceiling(.N / 2), 1)],
         'N_alleles' = .N),
           keyby = analysis_id_cols]
   }
@@ -2282,7 +2626,7 @@ pick_representative_allele <- function(dtf,
 
 
 group_and_count_alleles <- function(dtf, sort_var = 'depletion_max') {
-  res <- dplyr::group_by(dtf, 
+  res <- dplyr::group_by(dtf,
     overlap_var, patient_inclusion_crit, LOH_HLA,
     analysis_name, analysis_idx, project_extended) %>%
     dplyr::filter(!is.na(.data[[sort_var]])) %>%
