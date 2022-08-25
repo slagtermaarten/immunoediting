@@ -192,3 +192,42 @@ extract_brms_pars <- function(fit, pars = c('Intercept', 'ol')) {
       { set_names(., make_names_df_friendly(names(.))) }
   }) %>% unlist
 }
+
+
+#' Permute data and do Bayesian parameter estimation for each permutation
+#'
+#'
+bayes_negative_control <- result_cacher(
+  f = function(args, N_repeats = 1000) {
+    prep <- call_func(prep_cont_IE_analyses, args)
+
+    neg_c <- furrr::future_map_dfr(1:(N_repeats+1), function(i) {
+      l_dtf <- prep$dtf
+      if (i != 1) {
+        l_dtf <- l_dtf %>% mutate(y_var = sample(y_var))
+      }
+      b_lm <- fit_bayesian_regression(l_dtf)
+      perform_bayesian_IE_test(b_lm)
+    }, .id = 'i')
+
+    ## Permutation p-value
+    valid_perms <- setDT(neg_c) %>%
+      .[sampling_convergence == T] %>%
+      .[est_error <= 1] %>%
+      { . }
+
+    args %>%
+      append(neg_c[1]) %>%
+      append(list(
+        'perm_p' = valid_perms[, mean(.SD[1, estimate] >= .SD[-1, estimate])],
+        'N_perms' = as.integer(nrow(valid_perms))
+      ))
+  },
+  filename = function() {
+    file.path(rds_dir, 'bayes_negative_control',
+      paste0(paste(args, collapse = '-'), make_flag(N_repeats), '.rds'))
+  },
+  min_mod_time = '2021-03-04 11:00'
+)
+
+

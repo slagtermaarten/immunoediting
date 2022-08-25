@@ -792,7 +792,8 @@ for (v in vars) {
 immune cell infiltration?
 
 ```{r, depletion_immune_correlation, eval = F, warning=FALSE}
-cor_dtf <- readRDS(file.path(rds_dir, 'xcell_neo_immune_correlations.rds'))
+cor_dtf <- 
+  readRDS(file.path(rds_dir, 'xcell_neo_immune_correlations.rds'))
 cor_dtf[, tumor_type := tumor_types[project_extended]]
 i_dat <- merge(t_dat, cor_dtf)
 i_dat[, cor(V2, cor)]

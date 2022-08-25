@@ -1,4 +1,4 @@
-source('~/antigenic_space/maarten-analyses/immune_editing/load_optitype.R')
+source(file.path(IE_root, 'load_optitype.R'))
 library(RPostgreSQL)
 library(glue)
 

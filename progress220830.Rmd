@@ -1,0 +1,83 @@
+Scared of fooling myself again.
+The challenge is to simultaneously weed out settings that will not be
+sensitive enough to detect any kind of an effect, but to do so in a
+fair manner so as not to inadvertently bias our final results towards editing. The
+permutation test safeguards against technical biases on the level of
+an individual sub-analysis. 
+but no clear equivalent exists for the case
+when filtering out low-quality sub-analyses.
+
+```{r, init, include=F, warning=FALSE}
+source('~/antigenic_space/bin/init.R')
+
+source(file.path(IE_root, 'continuous_IE_detection_init.R'))
+
+reg_method = 'glm'
+ncores = 20
+
+## We filter based on the p-value of beta_y, which can fairly be
+## assumed to be significant.
+setting_dtf <-
+  compile_all_coef_overview(
+    redo = F,
+    redo_subanalyses = F,
+    check_data_availability = F,
+    skip_missing = F,
+    # N_downsample_settings = 50,
+    ncores = ncores,
+    reg_method = reg_method,
+    include_non_ds_tallies = T,
+    z_normalize = F
+  )
+```
+
+```{r, warning=FALSE}
+source(file.path(IE_root, 'continuous_IE_detection_init.R'))
+
+filtering <- function(dtf) {
+  dtf <- filter_coef_overview(
+    dtf = dtf,
+    min_patients = 20,
+    min_project_size = 250,
+    intercept_filter_p_val = 1e-3,
+    intercept_filter_magnitude = NULL,
+    print_messages = T,
+    force_positive_intercept = T,
+    force_intercept_ge_rc = T
+    # delta_SE_filter = .2
+  )
+  return(dtf)
+}
+f_setting_dtf <-
+  setting_dtf %>%
+  annotate_pipeline_settings() %>%
+  filtering
+
+nrow(setting_dtf)
+nrow(f_setting_dtf)
+
+f_setting_dtf[, summary(perm_delta_pq)]
+# f_setting_dtf[is.na(perm_delta_pq)]
+f_setting_dtf[, .N, keyby = list(tumor_type, 
+  cut(perm_delta_pq, c(0, 0.05, .95, 1), include.lowest = TRUE))]
+
+
+check_perm_q(setting_dtf)
+check_perm_q(f_setting_dtf)
+
+setting_dtf[, .N, keyby = list(project_extended, 
+  cut(perm_delta_pq, c(-Inf, 0, 0.05, .95, 1, Inf), include.lowest = TRUE))]
+f_setting_dtf[, mean(abs(delta_n) > 1)]
+f_setting_dtf[, summary(intercept)]
+f_setting_dtf[abs(delta_n) > 1 & p_val_intercept > 1e-4]
+f_setting_dtf[, .N, keyby = list(sign(delta_n), abs(delta_n) > 1)]
+
+f_setting_dtf[, {
+  print(.BY)
+  print(summary(log10(p_val_intercept)))
+}, by = abs(delta_n) > 1]
+```
+
+```{r }
+f_setting_dtf
+```

@@ -12,10 +12,11 @@ if (!any(grepl('fasanalysis', search()))) {
 # devtools::install_github('jokergoo/ComplexHeatmap')
 
 source('~/libs/result_cacher.R')
-source(file.path(ma_dir, 'immune_editing', 'continuous_IE_detection_helpers.R'))
-source(file.path(ma_dir, 'immune_editing', 'HLA_presentation_scores_helpers.R'))
-source(file.path(ma_dir, 'immune_editing', 'pan_IE_settings_heatmap.R'))
-source(file.path(ma_dir, 'immune_editing', 'IE_analysis.R'))
+source(file.path(IE_root, 'continuous_IE_detection_helpers.R'))
+source(file.path(IE_root, 'continuous_IE_checks.R'))
+source(file.path(IE_root, 'HLA_presentation_scores_helpers.R'))
+source(file.path(IE_root, 'pan_IE_settings_heatmap.R'))
+source(file.path(IE_root, 'IE_analysis.R'))
 
 
 # all_cont_IE_settings <- tidyr::expand_grid(
@@ -29,7 +30,8 @@ source(file.path(ma_dir, 'immune_editing', 'IE_analysis.R'))
 all_cont_IE_settings <- tidyr::expand_grid(
   focus_allele = focus_hlas,
   overlap_var = c('mean_score', 'mean_score_AB'),
-  patient_inclusion_crit = c('strict_TR', 'TR', ''),
+  # patient_inclusion_crit = c('strict_TR', 'TR', ''),
+  patient_inclusion_crit = c('none', 'FDR0.01', 'FDR1', 'FDR10'),
   LOH_HLA = c('no_LOHHLA', 'LOHHLA', 'strict_LOHHLA'),
   analysis_name = analysis_names
 )

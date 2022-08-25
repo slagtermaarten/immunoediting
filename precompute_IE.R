@@ -4,23 +4,26 @@
 
 source('~/antigenic_space/bin/init.R')
 source(file.path(ma_dir, 'immune_editing', 'continuous_IE_detection_init.R'))
-source('~/libs/maartenutils/R/0-general_utils.R')
+# source('~/libs/maartenutils/R/0-general_utils.R')
+devtools::load_all(file.path('~/libs', 'quickMHC'))
 
 #' SETTINGS
-ncores <- 8
-ncores <- 8
 ncores <- 6
 ncores <- 4
 ncores <- 38
 ncores <- 40
-ncores <- 12
 ncores <- 24
 ncores <- 1
 ncores <- 36
+ncores <- 12
+ncores <- 8
 options(error = recover)
 options(error = traceback)
 # test <- function() { stop() }
 # test()
+# devtools::load_all(file.path('~/libs', 'maartenutils'))
+devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
+
 redo <- T
 redo <- F
 reg_method = 'rlm_one_group'
@@ -29,14 +32,21 @@ debug_master <- F
 check_res <- F
 fn_suffix = '-im_union'
 # ro_fn <- file.path(rds_dir, 'focus_allele_avg_HLA_presentation.rds')
-ro_fn <- file.path(rds_dir, glue('focus_allele_avg_HLA_presentation-hla_sim\\
-                                 _method_-cutoff-integration_method_\\
-                                 -union.rds'))
+ro_fn <- file.path(rds_dir, 
+  glue('focus_allele_avg_HLA_presentation-hla_sim\\
+    _method_-cutoff-integration_method_\\
+    -union.rds'))
 repertoire_overlap_dat <- readRDS(ro_fn)
 repertoire_overlap_dat <- NULL
 
-hla_alleles_to_test = focus_hlas
 hla_alleles_to_test = 'A3301'
+hla_alleles_to_test = focus_hlas
+
+for (hla_allele in hla_alleles_to_test) {
+  quickMHC::precompute_peps(hla_allele = hla_allele, ncores = ncores,
+    STS_on_affinity_peps_only = F)
+}
+
 
 # class(requires_computation)
 # print(requires_computation)

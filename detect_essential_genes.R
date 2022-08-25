@@ -10,6 +10,7 @@ parse_restifo_data <- function(FDR_thresh = .10) {
   fh <- fh[sigFDR <= FDR_thresh]
   return(fh)
 }
+parse_restifo_data(FDR_thresh = .00001)
 
 # if (T) {
 #   fh <- parse_restifo_data()
@@ -98,10 +99,30 @@ donor_ids <- intersect(setdiff(core_donors, 'TCGA-CJ-4888'),
   pipeline_out_fns[project %in% tcga_projects, donor_id])
 
 if (T) {
-  escape_prev_ext <- rbindlist(plyr::llply(donor_ids, detect_essential_genes,
+} else {
+  extra_extra_extra_lenient_escape_prev_ext <- rbindlist(
+    plyr::llply(donor_ids, detect_essential_genes,
+      .parallel = !maartenutils::local_run, FDR_thresh = .00001), 
+    fill = T)
+  w_saveRDS('extra_extra_extra_lenient_escape_prev_ext')
+
+  extra_extra_lenient_escape_prev_ext <- rbindlist(
+    plyr::llply(donor_ids, detect_essential_genes,
+      .parallel = !maartenutils::local_run, FDR_thresh = .0001), 
+    fill = T)
+  w_saveRDS('extra_extra_lenient_escape_prev_ext')
+
+  extra_lenient_escape_prev_ext <- rbindlist(
+    plyr::llply(donor_ids, detect_essential_genes,
+      .parallel = !maartenutils::local_run, FDR_thresh = .001), 
+    fill = T)
+  w_saveRDS('extra_lenient_escape_prev_ext')
+
+  escape_prev_ext <- rbindlist(
+    plyr::llply(donor_ids, detect_essential_genes,
       .parallel = !maartenutils::local_run), fill = T)
   w_saveRDS('escape_prev_ext')
-} else {
+
   lenient_escape_prev_ext <- rbindlist(
     plyr::llply(donor_ids, detect_essential_genes,
       .parallel = !maartenutils::local_run, FDR_thresh = .01), 
