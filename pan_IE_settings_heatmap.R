@@ -211,6 +211,18 @@ ra_titles_short = c(
   patient_inclusion_crit = 'IT-resistant patients',
   hla_sim_range = 'PS filtering',
   LOH_HLA = 'LOH in HLA')
+replace_name <- function(v, old, new) {
+  names(v)[names(v) == old] <- new
+  return(v)
+}
+var_titles <- c(ca_titles, ra_titles_short) %>%
+  c('project_extended' = 'Tumor type') %>%
+  c('focus_allele' = 'IE focus allele') %>%
+  replace_name('et', 'expression_threshold') %>%
+  replace_name('VE', 'VE_threshold') %>%
+  replace_name('STS', 'sts_filtering') %>%
+  replace_name('PR', 'percentile_rank') %>%
+  { . }
 perc_ranks <- c(1, 1.9, 3, 4)
 output_dir <- '~/antigenic_space/maarten-analyses/img/20-09-24/IE_heatmaps'
 ## }}}

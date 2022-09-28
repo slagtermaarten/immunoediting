@@ -2,7 +2,10 @@ IE_requires_computation <- mod_time_comparator(
   # minimum_mod_time = '2021-4-21 22:36', verbose = TRUE)
   # minimum_mod_time = '2021-4-23 13:51', verbose = TRUE)
   # minimum_mod_time = '2021-4-24 11:51', verbose = TRUE)
-  minimum_mod_time = '2021-8-25 11:51', verbose = TRUE)
+  # minimum_mod_time = '2022-8-25 11:51', verbose = TRUE)
+  # minimum_mod_time = '2022-9-13 11:51', verbose = TRUE)
+  # minimum_mod_time = '2022-9-14 11:51', verbose = TRUE)
+  minimum_mod_time = '2022-9-21 14:31', verbose = TRUE)
 
 ## {{{ Constants
 scalar_analysis_components <- c('test_yr', 'p_val', 'p_val_no_reg',
@@ -127,14 +130,17 @@ gen_cont_IE_fn <- function(
   }
 
   if (replace_idx) {
+    neo_settings <- as.list(ds_param_grid[as.integer(analysis_idx), ])
     analysis_idx <-
-      complement_options(c(as.list(ds_param_grid[as.integer(analysis_idx), ]))) %>%
+      complement_options(neo_settings) %>%
       gen_opts_string(no_spaces = T, no_hla = T)
   }
+
   analysis_idx <- prepend_hyphen(analysis_idx)
   analysis_name <- prepend_hyphen(analysis_name)
   focus_allele <- prepend_hyphen(focus_allele)
-  hla_sim_range <- ifelse(is.null(hla_sim_range) || hla_sim_range == '',
+  hla_sim_range <- ifelse(
+    is.null(hla_sim_range) || hla_sim_range == '',
     '', paste(hla_sim_range, collapse = '_')) %>%
     prepend_hyphen
   reg_method <- prepend_hyphen(reg_method)
@@ -142,12 +148,13 @@ gen_cont_IE_fn <- function(
   patient_inclusion_crit <- prepend_hyphen(patient_inclusion_crit)
   overlap_var <- prepend_hyphen(overlap_var)
   p_val_bound <- ifelse(eps(p_val_bound, 0.05), '',
-    sprintf('-pvb-%s', format(p_val_bound, scientific = T, digits = 2)))
+    sprintf('-pvb-%s', format(p_val_bound,
+        scientific = T, digits = 2)))
   fill_var <- ifelse(fill_var == 'rc', '', prepend_hyphen(fill_var))
   tumor_type <- ifelse(is.null(project_extended), '',
     tumor_types[project_extended])
   z_normalize <- ifelse(z_normalize == T, '', '-not_z_normalized')
-  permute_input <- ifelse(length(permute_input) == 0, '', 
+  permute_input <- ifelse(length(permute_input) == 0, '',
     paste0('-permute_input=', paste0(permute_input, collapse = '-')))
   extension <- prepend_string(extension, prepend_string = '.')
 
@@ -169,6 +176,7 @@ gen_cont_IE_fn <- function(
   } else {
     fn <- file_head
   }
+
   return(fn)
 }
 
@@ -189,8 +197,9 @@ subset_project <- function(dtf, project_extended = NULL,
       'pancancer')
 
   if (!pancan_mode || (pancan_mode && !pan_can_includes_all)) {
-    data_subs <- dtf %>%
-      dplyr::filter(project_extended == {{project_extended}})
+    l_project_extended <- as.character(project_extended)
+    setDT(dtf)
+    data_subs <- dtf[project_extended == l_project_extended]
     browser(expr = length(unique(data_subs$project_extended)) > 1)
   } else {
     data_subs <- dtf
@@ -341,6 +350,15 @@ test_data_sufficiency <- function(dtf,
 }
 
 
+compute_dtf_stats <- function(dtf) {
+  out <- list(
+    'n_patients' = dtf[, .N],
+    'n_nz_patients' = dtf[c > 0, .N]
+  )
+  return(out)
+}
+
+
 #' Take in a \code{donor_summary}(-like) object and compute the relationship
 #' between yield rate and HLA repertoire overlap
 #'
@@ -382,17 +400,28 @@ compute_continuous_IE_statistics <- function(
     f <- gam_fit_model
   } else if (reg_method == 'glm') {
     f <- glm_fit_model
+  } else if (reg_method == 'glm_log') {
+    f <- pryr::partial(glm_fit_model, log_transform = T)
   } else {
     f <- get(reg_method)
   }
   lm_results <- purrr::map(p_dtf, f)
 
-  if (!grepl('wilcox', reg_method)) {
+  if (TRUE && !grepl('wilcox', reg_method)) {
     ## Append Wilcoxon-test results if that's not all that was asked
     ## for
     wilcox_results <- purrr::map(p_dtf, fit_wilcox_model)
     out <- purrr::map(seq(p_dtf),
       ~c(lm_results[[.x]], wilcox_results[[.x]])
+    )
+  }
+
+  if (TRUE) {
+    ## Append Wilcoxon-test results if that's not all that was asked
+    ## for
+    results <- purrr::map(p_dtf, compute_dtf_stats)
+    out <- purrr::map(seq(p_dtf),
+      ~c(lm_results[[.x]], results[[.x]])
     )
   }
 
@@ -466,7 +495,7 @@ fit_rlm_model <- function(
   weighted = T, include_lm = F, remove_low_TMB_patients = T,
   debug = F, N_perms = 100) {
 
-  if (null_dat(dtf)) return(NULL) 
+  if (null_dat(dtf)) return(NULL)
   start_time <- Sys.time()
   if (!test_data_sufficiency(dtf))
     return(tibble_row(message = 'data_insufficient'))
@@ -484,7 +513,7 @@ fit_rlm_model <- function(
   }
 
   unnormalized_mod <- fit_rlm_(
-    dtf = l_dtf, 
+    dtf = l_dtf,
     weighted = weighted,
     simple_output = T
   )
@@ -514,7 +543,7 @@ fit_rlm_model <- function(
       p_dtf$y_var <- p_dtf$y_var / coef(p_unnormalized_mod)[1]
       fit_rlm_(p_dtf, include_lm = F, weighted = weighted)
     })
-    
+
     num_cols <- map_lgl(perm_res, is.numeric) %>%
       which %>% names %>% { . }
 
@@ -523,12 +552,12 @@ fit_rlm_model <- function(
     perm_stats <- perm_res %>%
       dplyr::select(any_of(num_cols)) %>%
       summarise(across(everything(),
-          c('median' = median, 'mad' = mad, 'mean' = mean), 
+          c('median' = median, 'mad' = mad, 'mean' = mean),
           na.rm = T)) %>%
       { . }
 
     # perm_stats[['delta_mean_median']]
-    delta_mean_c_mean <- 
+    delta_mean_c_mean <-
       normalized_mod$delta_mean - perm_stats[['delta_mean_mean']]
     perm_var <- 1/N_perms * sum(perm_res$delta_SE^2)
     ## SE of 'corrected' distribution is sum of original and
@@ -539,9 +568,9 @@ fit_rlm_model <- function(
     ## observations below the observed value for given statistic
     perm_stats %<>%
       append(
-        qnorm(p = c(.025, .5, .975), 
+        qnorm(p = c(.025, .5, .975),
           mean = delta_mean_c_mean, sd = delta_mean_c_SE) %>%
-        set_names(c('delta_mean_c_ci_l', 'delta_mean_c_mean', 
+        set_names(c('delta_mean_c_ci_l', 'delta_mean_c_mean',
             'delta_mean_c_ci_h')) %>%
         as.list()
       )
@@ -702,7 +731,7 @@ fit_rlm_ <- function(dtf, simple_output = F, include_AFDP = F,
   if (is.null(coef_mat[2,1]) || is.na(coef_mat[2,1])) {
     browser()
   }
-  tryCatch(1 / coef_mat[2, 1], error = function(e) { browser() }) 
+  tryCatch(1 / coef_mat[2, 1], error = function(e) { browser() })
 
   delta <- tryCatch(
     predict(lc, newdata = data.frame(ol = 1), se.fit = T),
@@ -711,7 +740,7 @@ fit_rlm_ <- function(dtf, simple_output = F, include_AFDP = F,
     return(list(message = 'predict_step_failed'))
   }
 
-  delta <- 
+  delta <-
     { delta$fit + c(-1.96, 0, 1.96) * delta$se.fit - 1 } %>%
     as.list() %>%
     append(list(delta$se.fit)) %>%
@@ -766,19 +795,54 @@ fit_rlm_ <- function(dtf, simple_output = F, include_AFDP = F,
 }
 
 
-fit_glm_ <- function(dtf, simple_output = FALSE) {
+fit_glm_ <- function(dtf, simple_output = FALSE, 
+  fit_PS = TRUE, fit_offset = FALSE, fit_CYT = F) {
   dtf <- setDT(dtf)[is.finite(i) & is.finite(c) & is.finite(ol)]
 
   if (!test_data_sufficiency(dtf)) return(NULL)
 
-  fit <- tryCatch(stats::glm(c~0+i+i:ol, data = dtf), 
-    error = function(e) { NULL })
+  if (fit_PS) {
+    if (fit_CYT) {
+      if (fit_offset) {
+        fit <- tryCatch(stats::glm(c~1+i+i:ol+CYT, data = dtf),
+          error = function(e) { NULL })
+      } else {
+        fit <- tryCatch(stats::glm(c~0+i+i:ol+CYT, data = dtf),
+          error = function(e) { NULL })
+      }
+    } else {
+      if (fit_offset) {
+        fit <- tryCatch(stats::glm(c~1+i+i:ol, data = dtf),
+          error = function(e) { NULL })
+      } else {
+        fit <- tryCatch(stats::glm(c~0+i+i:ol, data = dtf),
+          error = function(e) { NULL })
+      }
+    }
+  } else {
+    if (fit_CYT) {
+      if (fit_offset) {
+        fit <- tryCatch(stats::glm(c~1+i+CYT, data = dtf),
+          error = function(e) { NULL })
+      } else {
+        fit <- tryCatch(stats::glm(c~0+i+CYT, data = dtf),
+          error = function(e) { NULL })
+      }
+    } else {
+      if (fit_offset) {
+        fit <- tryCatch(stats::glm(c~1+i, data = dtf),
+          error = function(e) { NULL })
+      } else {
+        fit <- tryCatch(stats::glm(c~0+i, data = dtf),
+          error = function(e) { NULL })
+      }
+    }
+  }
 
   if (is.null(fit)) return(NULL)
-  
 
   if (simple_output) {
-    return(lc)
+    return(fit)
   }
 
   if (is.null(fit)) {
@@ -789,30 +853,127 @@ fit_glm_ <- function(dtf, simple_output = FALSE) {
 
   out <- list(
     'message' = 'OK',
-    'intercept' = coef_mat[1, 1],
-    'p_val_intercept' = coef_mat[1, 4],
-    'rc' = coef_mat[2, 1],
-    'delta' = coef_mat[2, 1] / coef_mat[1, 1],
-    'p_val' = coef_mat[2, 4],
-    't_val' = coef_mat[2, 3],
     'n_patients' = dtf[, .N],
+    ## High should mean good correspondence to linear model
     'deviance_red' = 1 - fit$deviance / fit$null.deviance,
     'converged' = fit$converged
-  ) %>% { . }
+    ) %>% { . }
+
+  ## This is rather fugly, but pragmatic..?
+  if (fit_PS) {
+    if (fit_CYT) {
+      if (fit_offset) {
+        out <- c(out, list(
+          'offset' = coef_mat[1, 1],
+          'intercept' = coef_mat[2, 1],
+          'p_val_intercept' = coef_mat[2, 4],
+          'rc' = coef_mat[3, 1],
+          'rc_CYT' = coef_mat[4, 1],
+          ## Should be in range [-1, 0]
+          'delta' = coef_mat[3, 1] / coef_mat[2, 1],
+          'p_val' = coef_mat[3, 4],
+          'p_val_CYT' = coef_mat[4, 4],
+          't_val' = coef_mat[3, 3])
+        )
+      } else {
+        out <- c(out, list(
+          'intercept' = coef_mat[1, 1],
+          'p_val_intercept' = coef_mat[1, 4],
+          'rc' = coef_mat[2, 1],
+          'rc_CYT' = coef_mat[3, 1],
+          ## Should be in range [-1, 0]
+          'delta' = coef_mat[2, 1] / coef_mat[1, 1],
+          'p_val' = coef_mat[2, 4],
+          'p_val_CYT' = coef_mat[3, 4],
+          't_val' = coef_mat[2, 3])
+        )
+      }
+    } else {
+      if (fit_offset) {
+        out <- c(out, list(
+          'offset' = coef_mat[1, 1],
+          'intercept' = coef_mat[2, 1],
+          'p_val_intercept' = coef_mat[2, 4],
+          'rc' = coef_mat[3, 1],
+          ## Should be in range [-1, 0]
+          'delta' = coef_mat[3, 1] / coef_mat[2, 1],
+          'p_val' = coef_mat[3, 4],
+          't_val' = coef_mat[3, 3])
+        )
+      } else {
+        out <- c(out, list(
+          'intercept' = coef_mat[1, 1],
+          'p_val_intercept' = coef_mat[1, 4],
+          'rc' = coef_mat[2, 1],
+          ## Should be in range [-1, 0]
+          'delta' = coef_mat[2, 1] / coef_mat[1, 1],
+          'p_val' = coef_mat[2, 4],
+          't_val' = coef_mat[2, 3])
+        )
+      }
+    }
+  } else {
+    if (fit_CYT) {
+      if (fit_offset) {
+        out <- c(out, list(
+          'offset' = coef_mat[1, 1],
+          'intercept' = coef_mat[2, 1],
+          'p_val_intercept' = coef_mat[2, 4],
+          'rc_CYT' = coef_mat[3, 1],
+          'p_val_CYT' = coef_mat[3, 4]
+        ))
+      } else {
+        out <- c(out, list(
+          'intercept' = coef_mat[1, 1],
+          'p_val_intercept' = coef_mat[1, 4],
+          'rc_CYT' = coef_mat[2, 1],
+          'p_val_CYT' = coef_mat[2, 4]
+        ))
+      }
+    } else {
+      if (fit_offset) {
+        out <- c(out, list(
+          'offset' = coef_mat[1, 1],
+          'intercept' = coef_mat[2, 1],
+          'p_val_intercept' = coef_mat[2, 4]
+        ))
+      } else {
+        out <- c(out, list(
+          'intercept' = coef_mat[1, 1],
+          'p_val_intercept' = coef_mat[1, 4]
+        ))
+      }
+    }
+  }
 
   return(out)
 }
 
 
+fit_glm_log_ <- function(dtf, simple_output = FALSE, 
+  fit_offset = TRUE, fit_PS = TRUE, fit_CYT = FALSE) {
+  if (maartenutils::null_dat(dtf)) return(NULL)
+  if (is.null(dtf$c) || all(is.na(dtf$c))) return(NULL)
+  if (is.null(dtf$i) || all(is.na(dtf$i))) return(NULL)
+
+  dtf %>%
+    dplyr::mutate(c = log10(c + 1)) %>%
+    dplyr::mutate(i = log10(i + 1)) %>%
+    fit_glm_(fit_offset = fit_offset, fit_PS = fit_PS, 
+      fit_CYT = fit_CYT, simple_output = simple_output)
+}
+
+
 gen_sample_data <- function(N_p = 500, sd = 1) {
   dtf <- tibble(
-    i = rpois(N_p, 20), 
-    c = rnorm(N_p, i * .15, sd), 
+    i = rpois(N_p, 20),
+    c = rnorm(N_p, i * .15, sd),
     ol = runif(N_p)
   )
   return(dtf)
 }
-print(fit_glm_(gen_sample_data()))
+# print(fit_glm_(gen_sample_data(sd = 10)))
+# print(fit_glm_(gen_sample_data()))
 
 
 fit_nb_mod = function(x, formula) {
@@ -828,7 +989,7 @@ filter_low_TMB_patients <- function(dtf) {
   ## least one neo-antigen with the current filtering settings. Use
   ## a simple model to estimate that TMB threshold
   if (null_dat(dtf)) return(NULL)
-  dtf$i <- tryCatch(round(dtf$i), error = function(e) { browser() }) 
+  dtf$i <- tryCatch(round(dtf$i), error = function(e) { browser() })
   dtf$c <- round(dtf$c)
   # dtf$c_q <- dtf$c / max(dtf$c)
   # dtf$i_q <- dtf$i / max(dtf$i)
@@ -1086,13 +1247,14 @@ gam_fit_model <- function(dtf) {
 
 
 glm_fit_model <- function(
-  dtf, 
+  dtf,
   remove_low_TMB_patients = FALSE,
+  log_transform = F,
   N_perms = 100) {
 
-  if (null_dat(dtf)) return(NULL) 
+  if (null_dat(dtf)) return(NULL)
   dtf <- dtf[is.finite(y_var) & is.finite(ol)]
-  if (null_dat(dtf)) return(NULL) 
+  if (null_dat(dtf)) return(NULL)
 
   if (remove_low_TMB_patients) {
     l_dtf <- filter_low_TMB_patients(dtf)
@@ -1106,7 +1268,11 @@ glm_fit_model <- function(
     nz_report <- list()
   }
 
-  fit <- fit_glm_(l_dtf)
+  if (log_transform) {
+    fit <- fit_glm_log_(l_dtf)
+  } else {
+    fit <- fit_glm_(l_dtf)
+  }
 
   if (is.null(fit))
     return(tibble_row(message = 'glm_model_fit_failed'))
@@ -1118,21 +1284,34 @@ glm_fit_model <- function(
       p_fit <- fit_glm_(p_dtf, simple_output = FALSE)
       return(p_fit)
     })
-    
+
+    if (F) {
+      browser()
+      p <- ggplot(perm_res, aes(x = 1, y = delta)) + 
+        geom_boxplot() +
+        coord_cartesian(
+          ylim = quantile(perm_res$delta, c(p_eps, 1-p_eps))
+        ) +
+        geom_hline(yintercept = fit$delta)
+      print_plot_eval(print(p),
+        width = 17.4, height = 10,
+        filename = file.path(IE_img_dir, 'test.pdf'))
+    }
+
     num_cols <- map_lgl(perm_res, is.numeric) %>%
       which %>% names %>% { . }
 
     ## Compute stats over all numerical values of the permutation
     ## distribution
-    perm_stats <- 
+    perm_stats <-
       perm_res %>%
       dplyr::select(any_of(num_cols)) %>%
       summarise(across(everything(),
-          c('median' = median, 'mad' = mad, 'mean' = mean), 
+          c('median' = median, 'mad' = mad, 'mean' = mean),
           na.rm = T)) %>%
       { . }
 
-    # delta_mean_c_mean <- 
+    # delta_mean_c_mean <-
     #   fit$delta_mean - perm_stats[['delta_mean_mean']]
     # perm_var <- 1/N_perms * sum(perm_res$delta_SE^2)
     # ## SE of 'corrected' distribution is sum of original and
@@ -1152,9 +1331,7 @@ glm_fit_model <- function(
     perm_stats <- list()
   }
 
-  res <- list(
-    message = 'OK',
-    'n_patients' = dtf[, .N]) %>%
+  res <- list(message = 'OK') %>%
     c(fit) %>%
     c(perm_stats)
 
@@ -1253,6 +1430,7 @@ test_continuous_IE <- function(
   if (include_call)
     f_args <- as.list(environment())
 
+
   o_fn <- gen_cont_IE_fn(
     base_name = 'cont-IE',
     focus_allele = focus_allele,
@@ -1318,6 +1496,7 @@ test_continuous_IE <- function(
       data_subs <- subset_project(prep$dtf, pe)
       if (null_dat(data_subs)) return(NULL)
       tryCatch({
+        source(file.path(IE_root, 'continuous_IE_detection_init.R'))
         compute_continuous_IE_statistics(
           dtf = data_subs,
           reg_method = reg_method,
@@ -1326,11 +1505,10 @@ test_continuous_IE <- function(
         )
       }, error = function(e) { print(e); NULL })
     }, .parallel = (ncores > 1))
-
     ret <- list(
       'analysis_name' =
         (attr(prep$dtf, 'analysis_name') %||%
-          glue::glue('{focus_allele}_{analysis_name}')),
+         glue::glue('{focus_allele}_{analysis_name}')),
       'stats' = stats_by_project
     )
   }
@@ -1349,6 +1527,7 @@ test_continuous_IE <- function(
     attr(ret, 'call') <- f_args
     attr(ret, 'prep') <- prep
   }
+
   return(ret)
 }
 
@@ -1397,6 +1576,7 @@ wrapper_plot_repertoire_overlap_vs_yield_rate <- function(
 #'
 #'
 prep_cont_IE_analyses <- function() {
+browser()
   ## Determine donor_summary file to load in
   obj_fn <- gen_cont_IE_ds_fn(
     hla_allele = focus_allele,
@@ -1718,11 +1898,11 @@ format_overview_res <- function(
     }
   }
 
-  if (all(c('perm_delta_mean_c_mean', 
-        'perm_delta_mean_c_ci_l') %in% 
+  if (all(c('perm_delta_mean_c_mean',
+        'perm_delta_mean_c_ci_l') %in%
       colnames(dtf)) &&
       !'perm_delta_mean_c_SE' %in% colnames(dtf)) {
-    dtf[, 'perm_delta_mean_c_SE' := 
+    dtf[, 'perm_delta_mean_c_SE' :=
       (perm_delta_mean_c_mean - perm_delta_mean_c_ci_l) / 1.96]
   }
 
@@ -1733,6 +1913,33 @@ format_overview_res <- function(
   if (all(c('delta', 'perm_delta_median') %in% colnames(dtf))) {
     dtf[, 'delta_n' := delta - perm_delta_median]
   }
+
+  stopifnot('analysis_idx' %in% colnames(dtf))
+  dtf <- cbind(dtf, ds_param_grid[dtf[, analysis_idx], ])
+  dtf$VE_threshold %<>% friendly_factor
+  dtf$expression_threshold %<>% friendly_factor
+  dtf$sts_filtering %<>% friendly_factor
+  dtf$percentile_rank %<>% friendly_factor
+  dtf$processing_threshold %<>% friendly_factor
+
+  if ('percentile_rank' %in% colnames(dtf) &&
+    !any(grepl('APR', levels(dtf$percentile_rank)))) {
+    perc_rank_print <- purrr::map_chr(
+      auto_name(levels(dtf$percentile_rank)),
+      ~glue::glue('APR={.x}')) %>%
+      { setNames(names(.), .) }
+    dtf[, percentile_rank :=
+      forcats::fct_recode(percentile_rank, !!!perc_rank_print)]
+  }
+
+  if ('delta_n' %in% colnames(dtf)) {
+    l_id_vars <- setdiff(id_vars, c('tumor_type', 'focus_allele'))
+    dtf[, 'delta_n_cov' := sd(delta_n) / abs(mean(delta_n)),
+      by = l_id_vars]
+  }
+
+  dtf <- format_coef_overview_(dtf)
+  dtf <- recode_RNA_expression(dtf)
 
   return(dtf)
 }
@@ -1975,7 +2182,7 @@ print_overview_stats <- function(dtf, stage_id = '',
   if ('intercept' %in% colnames(dtf)) {
     cat('\nlm frequency stats\n')
     setDT(dtf)
-    dtf[, 'exp_result' := intercept > 0 & rc < 0]
+    # dtf[, 'exp_result' := intercept > 0 & rc < 0]
     dtf[, .N, keyby = .(
       'intercept' = cut(intercept, breaks = cut_breaks),
       'rc' = cut(rc, breaks = cut_breaks)
@@ -1996,7 +2203,8 @@ print_overview_stats <- function(dtf, stage_id = '',
   ## This assumes that all levels are observed
   N_possible_analyses <- dtf %>%
     dplyr::select(focus_allele, overlap_var, patient_inclusion_crit,
-                  project_extended, LOH_HLA, analysis_name, analysis_idx) %>%
+                  project_extended, LOH_HLA, analysis_name,
+                  analysis_idx) %>%
     as.list %>%
     map(~unique(.x)) %>%
     { do.call(expand.grid, .) } %>%
@@ -2058,7 +2266,7 @@ print_overview_stats <- function(dtf, stage_id = '',
     cat('\n', '# CI_l > 0: ', dtf[delta_CI_l > 0, .N])
   }
 
-  if (!is.null(latest_stats)) {
+  if (F && !is.null(latest_stats)) {
     print(latest_stats, n = 1e9)
   }
 
@@ -2360,6 +2568,11 @@ pick_representative_allele <- function(dtf,
     mystop(msg = glue('{sort_var} not in input'))
   }
 
+  analysis_id_cols <- colnames(all_cont_IE_settings) %>%
+    setdiff('focus_allele') %>%
+    c('analysis_idx', 'project_extended') %>%
+    unique()
+
   if (grepl('dplyr', method)) {
     sub_method <- gsub('dplyr_', '', method)
 
@@ -2382,16 +2595,19 @@ pick_representative_allele <- function(dtf,
       dplyr::filter(row_number() == get_proper_idx(n()))
   } else if (method == 'DT_careful') {
     setDT(dtf)
-    group_vars <- c('overlap_var', 'patient_inclusion_crit', 'LOH_HLA',
-      'analysis_name', 'analysis_idx', 'project_extended')
-    rc_sel <- dtf %>%
+    rc_sel <-
+      dtf %>%
       .[!is.na(get(sort_var))] %>%
-      .[order(get(sort_var)), cbind(.SD, N_alleles = .N), by = group_vars] %>%
-      .[, i := 1:.N, by = group_vars]
+      .[order(get(sort_var)),
+        cbind(.SD, N_alleles = .N),
+        by = analysis_id_cols] %>%
+      .[, i := 1:.N, by = analysis_id_cols]
 
     if ('opt_string' %in% colnames(rc_sel)) {
-      ## Strip allele away from opt string, since we're integrating it out
-      rc_sel[, opt_string := gsub('[^ ]*\\s{1}(.*)', '\\1', opt_string)]
+      ## Strip allele away from opt string, since we're integrating it
+      ## out
+      rc_sel[, opt_string :=
+        gsub('[^ ]*\\s{1}(.*)', '\\1', opt_string)]
     }
     rc_sel_even <- rc_sel[N_alleles %% 2 == 0]
     rc_sel_uneven <- rc_sel[N_alleles %% 2 == 1]
@@ -2413,31 +2629,31 @@ pick_representative_allele <- function(dtf,
       ## Simply average numeric, non p-value columns;
       ## HMP average p-values
       df_a <- rc_sel_even[, lapply(.SD, mean),
-        by = group_vars, .SDcols = c(numeric_columns)]
+        by = analysis_id_cols, .SDcols = c(numeric_columns)]
       df_b <- rc_sel_even[, lapply(.SD, hmp_wrapper),
-        by = group_vars, .SDcols = p_val_columns]
-      rc_sel_even <- merge(df_a, df_b, by = group_vars)
+        by = analysis_id_cols, .SDcols = p_val_columns]
+      rc_sel_even <- merge(df_a, df_b, by = analysis_id_cols)
     }
 
     if (nrow(rc_sel_uneven) > 0) {
       rc_sel_uneven <-
-        rc_sel_uneven[i == ceiling(N_alleles / 2), .SD, by = group_vars]
+        rc_sel_uneven[i == ceiling(N_alleles / 2), .SD,
+          by = analysis_id_cols]
     }
 
     rc_sel <- rbind(rc_sel_even, rc_sel_uneven, fill = T)
     rc_sel[, i := NULL]
     rc_sel[, focus_allele := NULL]
-    na_cols <- map_lgl(rc_sel, ~all(is.na(.x))) %>% which %>% names
+    na_cols <- map_lgl(rc_sel, ~all(is.na(.x))) %>%
+      which %>% names
     if (length(na_cols) > 0) {
       rc_sel[, !na_cols]
     }
   } else if (method == 'DT_aggressive') {
+    ## This method will pick the 2nd with n == 4 and 3rd with n == 5
     setDT(dtf)
-    analysis_id_cols <- colnames(all_cont_IE_settings) %>%
-      setdiff('focus_allele') %>%
-      c('analysis_idx', 'project_extended')
     rc_sel <-
-      dtf[, cbind(.SD[order(rc)][max(ceiling(.N / 2), 1)],
+      dtf[, cbind(.SD[order(get(sort_var))][max(ceiling(.N / 2), 1)],
         'N_alleles' = .N),
           keyby = analysis_id_cols]
   }
@@ -2528,35 +2744,3 @@ cont_IE_fn_to_args <- function(
   args$analysis_idx <- as.integer(args$analysis_idx)
   return(args)
 }
-
-
-#' Test factor enrichment
-#'
-#' Test enrichment of a discrete variable's level among the top or
-#' bottom of a rank-ordered list
-test_fe <- function(vn = 'focus_allele', dtf = analysis_idx_o) {
-  library(fgsea)
-  # cat('\n', vn, '\n')
-  if (is.factor(dtf[[vn]])) {
-    levs <- levels(dtf[[vn]]) %>%
-      { setNames(., .) }
-  } else {
-    levs <- unique(dtf[[vn]]) %>%
-      { setNames(., .) } %>%
-      sort()
-  }
-  purrr::map_dbl(levs, function(lev) {
-    suppressWarnings(fgsea::calcGseaStat(
-      stats = setNames(1:nrow(dtf), dtf$focus_allele),
-      selectedStats = which(dtf[[vn]] == lev),
-      # scoreType = 'pos'
-      scoreType = 'std'
-    ))
-  }) %>%
-  tibble::enframe(vn, 'ES') %>%
-  dplyr::mutate(ES = ES - mean(ES)) %>%
-  dplyr::arrange(desc(ES)) %>%
-  { . }
-}
-# test_fe()
-

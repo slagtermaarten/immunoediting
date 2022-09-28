@@ -76,7 +76,6 @@ f_setting_dtf <-
   ) %>%
   annotate_pipeline_settings() %>%
   filtering
-
 ```
 
 Averaging over all settings, we now get a very subtle shift towards IE (negative $\delta$):
@@ -89,6 +88,9 @@ saas <- function(dtf) {
   print(knitr::kable(head(dtf, n = 30L)))
   print(knitr::kable(dtf[, enframe(summary(V1))]))
 }
+
+f_setting_dtf[, median(delta)] 
+f_setting_dtf[, mean(delta)] 
 
 f_setting_dtf[, median(delta), by = project_extended] %>%
   saas()
@@ -115,6 +117,10 @@ f_setting_dtf <- f_setting_dtf[abs(delta_n) <= 1]
 ```
 
 ```{r, results='asis'}
+setting_dtf[, median(delta_n),
+  by = 'project_extended'][order(V1)] %>%
+  saas()
+
 f_setting_dtf[, median(delta_n),
   by = 'project_extended'][order(V1)] %>%
   saas()
@@ -144,7 +150,9 @@ tumor types.
 # lev <- 'A1101'
 calcGseaStat(
   stats = 1:10,
-  selectedStats = 1,
+  # selectedStats = 1:3,
+  # selectedStats = 6:9,
+  selectedStats = 2:4,
   # scoreType = 'pos'
   scoreType = 'std'
 )

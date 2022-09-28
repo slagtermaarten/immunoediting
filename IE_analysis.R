@@ -14,6 +14,16 @@ theme_set(
   )
 )
 
+CV_IE_settings <- c('focus_allele',
+  'overlap_var', 'patient_inclusion_crit', 'LOH_HLA',
+  'processing_threshold', 'sts_filtering', 'percentile_rank',
+  # 'expression_threshold', 'VE_threshold',
+  'RNA_expression',
+  'analysis_name')
+
+IE_settings_pal <- 
+  gen_color_vector(arg = CV_IE_settings, name = 'FantasticFox1')
+
 tts <- names(tumor_types) %>% { .[!grepl('Cutaneous', .)] }
 if (F) {
   tts <- grep('Stomach~EBV', tts, value = T)[2]
@@ -505,7 +515,8 @@ summarize_pan_IE_heatmap <- function(dtf) {
 #'
 #'
 plot_bayesian_error_vs_effect <- function(
-  dtf, x_var = '-log2_rc_error',
+  dtf, 
+  x_var = '-log2_rc_error',
   return_mode = 'patchwork',
   grouping = NULL) {
   dtf[, log2_evid_ratio := log2(evid_ratio)]
@@ -573,7 +584,7 @@ plot_bayesian_error_vs_effect <- function(
 
 
 call_func <- function(f, args) {
-  if (missing(args) || is.null(args) || !is.list(args)) 
+  if (missing(args) || is.null(args) || !is.list(args))
     stop('No valid args')
   overlapping_args <- intersect(names(formals(f)), names(args))
   # ignored_args <- setdiff(names(formals(f)), names(args))
@@ -1277,69 +1288,25 @@ data_permutation_neg_control <- result_cacher(
 )
 
 
-#' Format the result of compile_all_coef_overview in preparation for
-#' factor analysis
-#'
-#'
-format_coef_overview <- function(
-  dtf,
-  delta_filter_error = NULL,
-  filter_intercept = F,
-  rc_filter_error = 2,
-  pick_allele_method = 'none',
-  intercept_filter_error = 2,
-  plot_fishtails = NULL,
-  pp_hl_threshold = .99) {
-
-  dtf[, intercept := intercept_estimate]
-  dtf[, rc := ol_estimate]
-  dtf[, 'yr_fractional_change' := estimate]
-  dtf[, log2_evid_ratio := log2(evid_ratio)]
-  dtf[, log2_est_error := log2(est_error)]
-  dtf[, log2_rc_error := log2(ol_est_error)]
-  dtf[, log2_intercept_cov :=
-    log2(intercept_est_error) - log2(abs(intercept_estimate))]
-  dtf[, 'log2_rc_cov' := log2(ol_est_error / abs(ol_estimate))]
-  dtf[post_prob <= pp_hl_threshold, star := 'G']
-  dtf[post_prob >= (1-pp_hl_threshold), star := 'L']
-
-  dtf <- filter_bayesian_coef_overview(
-    dtf = dtf,
-    filter_intercept = filter_intercept,
-    delta_filter_error = delta_filter_error,
-    rc_filter_error = rc_filter_error,
-    intercept_filter_error = intercept_filter_error,
-    plot_fishtails = plot_fishtails,
-    pick_allele_method = pick_allele_method
-  )
-
-  stopifnot(all(dtf$sampling_convergence))
-  dtf <- cbind(dtf, ds_param_grid[dtf[, analysis_idx], ])
-
-  dtf$VE_threshold %<>% friendly_factor
-  dtf$expression_threshold %<>% friendly_factor
+format_coef_overview_ <- function(dtf) {
+  dtf$focus_allele %<>% friendly_factor
+  dtf$patient_inclusion_crit %<>% friendly_factor
+  # dtf$patient_inclusion_crit <-
+  #   factor(dtf$patient_inclusion_crit,
+  #     levels = c('', 'strict_TR', 'TR'),
+  #     labels = c('none', 'FDR1', 'FDR10'))
+  dtf$patient_inclusion_crit <-
+    factor(dtf$patient_inclusion_crit,
+      levels = rev(c('FDR10', 'FDR1', 'FDR0.01', 'none')),
+      labels = rev(c('stringent', 'moderate', 'lenient', 'none'))
+    )
+  dtf$LOH_HLA %<>% friendly_factor
+  dtf$LOH_HLA <- relevel(dtf$LOH_HLA, 'no_LOHHLA')
   dtf$sts_filtering %<>% friendly_factor
-  dtf$percentile_rank %<>% friendly_factor
-  dtf$processing_threshold %<>% friendly_factor
-
-  allowed_tumor_types <-
-    dtf[log2_est_error <= -2, .N, by = project_extended][N > 50] %>%
-    pull(project_extended)
-
-  excluded_tumor_types <- dtf[, setdiff(project_extended, allowed_tumor_types)]
-  dtf <- dtf[project_extended %in% allowed_tumor_types]
-
-  po <- dtf[, wa_var(.SD, 'estimate'), by = project_extended] %>%
-    .[order(V1), project_extended]
-  dtf[, project_extended := factor(project_extended, levels = po)]
-  po <- tumor_types[po]
-  dtf[, tumor_type := factor(tumor_types[as.character(project_extended)],
-    levels = po)]
-
-  dtf[, log10_n_patients := log10(n_patients)]
+  dtf$sts_filtering <- relevel(dtf$sts_filtering, 'FALSE')
+  dtf$overlap_var %<>% friendly_factor
   return(dtf)
 }
-
 
 
 #' Simulate response var with presentation score taken from observed
@@ -1520,22 +1487,6 @@ annotate_pipeline_settings <- function(dtf) {
   t_dat$percentile_rank <-
     factor(t_dat$percentile_rank, levels = c(4, 3, 1.9, 1))
   t_dat$processing_threshold %<>% friendly_factor
-  t_dat$focus_allele %<>% friendly_factor
-  t_dat$patient_inclusion_crit %<>% friendly_factor
-  # t_dat$patient_inclusion_crit <-
-  #   factor(t_dat$patient_inclusion_crit,
-  #     levels = c('', 'strict_TR', 'TR'),
-  #     labels = c('none', 'FDR1', 'FDR10'))
-  t_dat$patient_inclusion_crit <-
-    factor(t_dat$patient_inclusion_crit,
-      levels = rev(c('FDR10', 'FDR1', 'FDR0.01', 'none')),
-      labels = rev(c('stringent', 'moderate', 'lenient', 'none'))
-    )
-  t_dat$LOH_HLA %<>% friendly_factor
-  t_dat$LOH_HLA <- relevel(t_dat$LOH_HLA, 'no_LOHHLA')
-  t_dat$sts_filtering %<>% friendly_factor
-  t_dat$sts_filtering <- relevel(t_dat$sts_filtering, 'FALSE')
-  t_dat$overlap_var %<>% friendly_factor
   # browser(expr = any(is.na(t_dat)))
   # t_dat[which(is.na(t_dat), arr.ind = T)[1]]
 
@@ -2034,27 +1985,58 @@ fit_forest <- function(tumor_type) {
 }
 
 
+id_vars <- c('overlap_var',
+  'patient_inclusion_crit', 'LOH_HLA', 'analysis_name',
+  'focus_allele', 'reg_method', 'z_normalize',
+  'expression_threshold', 'VE_threshold', 'sts_filtering',
+  'percentile_rank', 'processing_threshold', 'tumor_type',
+  'project_extended')
+
+
+#' Count the number of sub-analysis per group, as defined by a unique
+#' combination of all of the id_vars, and filter out incomplete groups
+#'
+#'
+subset_subanalysis_groups <- function(t_dat, id_vars,
+  filter_mode = 'max') {
+  worthwhile_settings <- t_dat[, .N, by = id_vars]
+  # worthwhile_settings <- worthwhile_settings[N > 1]
+  if (filter_mode == 'max') {
+    worthwhile_settings <-
+      worthwhile_settings[N == max(worthwhile_settings$N)]
+  }
+  invisible(worthwhile_settings[, 'group_id' := 1:.N])
+  setkeyv(t_dat, id_vars)
+  t_dat <- t_dat[worthwhile_settings]
+  t_dat$N <- NULL
+
+  # t_dat[, .N, by = id_vars][, table(N)]
+  # t_dat
+
+  return(t_dat)
+}
+
+
 #' Filter a data.frame of sub-analyses for matching groups of
 #' sub-analyses that only differ in one of independent variables, such
 #' as a neo-antigen filtering setting (e.g. the gene expression
 #' filtering threshold). By analyzing such data subsets, the effect of
-#' this independent var can be directly assessed from the data.
+#' this var can be directly assessed from the data.
 #'
 #'
-filter_NN_subs <- function(track_var, response_vars = 'delta_mean',
-  max_groups = 1e4, identify_relative_outliers_by = NULL,
-  identify_outliers_by = NULL, twoD_sens_analysis_only = T,
-  restrict_highest_level = T, no_STS = T) {
+filter_NN_subs <- function(
+  t_dat = f_setting_dtf,
+  track_var,
+  response_vars = 'delta_mean',
+  max_groups = 1e4,
+  identify_relative_outliers_by = NULL,
+  identify_outliers_by = NULL,
+  twoD_sens_analysis_only = T,
+  restrict_highest_level = T,
+  no_STS = T) {
 
-  id_vars <- c('overlap_var',
-    'patient_inclusion_crit', 'LOH_HLA', 'analysis_name',
-    'focus_allele', 'reg_method', 'z_normalize',
-    'expression_threshold', 'VE_threshold', 'sts_filtering',
-    'percentile_rank', 'processing_threshold', 'tumor_type')
-
-  t_dat <- f_setting_dtf
-
-  if ('perm_delta_mean_mean' %nin% colnames(t_dat)) {
+  if (all(c('delta_mean', 'perm_delta_mean_mean') %in%
+      colnames(t_dat))) {
     ## perm_delta_mean_c_mean := delta_mean - perm_delta_mean_mean
     t_dat[, perm_delta_mean_mean :=
       delta_mean - perm_delta_mean_c_mean ]
@@ -2075,11 +2057,10 @@ filter_NN_subs <- function(track_var, response_vars = 'delta_mean',
     t_dat <- t_dat[VE_threshold == 'none']
   }
 
-  l_id_vars <- setdiff(id_vars, track_var)
-  worthwhile_settings <- t_dat[, .N, by = l_id_vars][N > 1]
-  invisible(worthwhile_settings[, 'group_id' := 1:.N])
-  setkeyv(t_dat, l_id_vars)
-  t_dat <- t_dat[worthwhile_settings]
+  l_id_vars <- setdiff(id_vars, track_var) %>%
+    intersect(colnames(t_dat))
+  t_dat <- subset_subanalysis_groups(t_dat = t_dat,
+    id_vars = l_id_vars)
 
   if (F) {
     t_dat <-
@@ -2121,16 +2102,19 @@ filter_NN_subs <- function(track_var, response_vars = 'delta_mean',
   t_dat <- t_dat[group_id %in% sel_groups]
 
   t_dat <- t_dat[, {
-    l_dtf <- .SD[,
-      c(track_var, response_vars, 'analysis_idx'), with = F]
+    l_dtf <- .SD[, c(track_var, response_vars, 'analysis_idx'), with = F]
     out <- suppressWarnings(melt(l_dtf,
         measure.vars = response_vars,
         variable.name = 'var'))
   }, by = c('group_id', l_id_vars)]
 
+
+  pe_levs <- levels(t_dat$project_extended)
   t_dat <- t_dat %>%
     dplyr::mutate(
-      project_extended = tumor_types_inv[as.character(tumor_type)]) %>%
+      project_extended =
+        factor(tumor_types_inv[as.character(tumor_type)], levels =
+          pe_levs)) %>%
     # dplyr::mutate(var = map_chr(as.character(var), ~var_names[[.x]]))
     # dplyr::mutate(var = map_chr(as.character(var), ~.x))
     { . }
@@ -2160,6 +2144,7 @@ filter_NN_subs <- function(track_var, response_vars = 'delta_mean',
       t_dat[, uniqueN(get(track_var)),
         by = project_extended][, V1] == 1)
   }
+  # t_dat$project_extended
 
   return(t_dat)
 }
@@ -2172,29 +2157,40 @@ filter_NN_subs <- function(track_var, response_vars = 'delta_mean',
 #'
 #'
 track_sum_stats_as_function_of_var <- function(
+  t_dat = f_settings_dtf,
   track_var = 'VE_threshold',
   redo = F,
   identify_relative_outliers_by = NULL,
-  twoD_sens_analysis_only = T,
+  twoD_sens_analysis_only = F,
+  restrict_highest_level = F,
+  no_STS = F,
   identify_outliers_by = NULL,
   response_vars = c('perm_delta_mean_pc', 'delta_mean',
     'scale', 'delta_SE'),
-  sort_var = response_vars[1]) {
+  sort_var = response_vars[1],
+  fn = NULL) {
 
-  response_var_string <- paste(response_vars, collapse = '_')
-  fn <- file.path(img_loc,
+  if (is.null(fn)) {
+    response_var_string <- paste(response_vars, collapse = '_')
+    fn <- file.path(IE_img_dir,
       glue('controlled_setting_titration\\
         {make_flag(track_var)}\\
-        {make_flag(response_var_string)}.png'))
-  if (!IE_requires_computation(fn) && !redo) return(NULL)
+        {make_flag(response_var_string)}.pdf'))
+        if (!IE_requires_computation(fn) && !redo) return(NULL)
+  }
 
   t_dat <- filter_NN_subs(
+    t_dat = t_dat,
     track_var = track_var,
-    restrict_highest_level = F,
+    restrict_highest_level = restrict_highest_level,
+    no_STS = no_STS,
     identify_relative_outliers_by = identify_relative_outliers_by,
     twoD_sens_analysis_only = twoD_sens_analysis_only,
     identify_outliers_by = identify_outliers_by,
-    response_vars = response_vars, max_groups = 1e4)
+    response_vars = response_vars,
+    max_groups = 1e4
+  )
+
   if (null_dat(t_dat)) return(NULL)
 
   meds <-
@@ -2212,6 +2208,7 @@ track_sum_stats_as_function_of_var <- function(
 
     p1 <- ggplot(p_dat,
       aes(x = project_extended, y = value, group = var)) +
+      geom_hline(yintercept = 0) +
       geom_point() +
       geom_line() +
       right_legend +
@@ -2274,13 +2271,16 @@ track_sum_stats_as_function_of_var <- function(
   p <- ggplot(t_dat,
     aes_string(x = track_var, y = 'value', group = 'group_id')) +
     # geom_point(alpha = .2, size = .5, color = my_grey) +
-    geom_line(alpha = .1, color = my_grey) +
+    ggrastr::rasterise(geom_line(alpha = .1, color = my_grey),
+      dpi = 300) +
+    geom_hline(yintercept = 0, color = 'grey20', size = .5) +
     geom_point(data = meds, alpha = .8, size = .7, color = 'black') +
     geom_line(data = meds, alpha = .8, size = .5, color = 'black') +
     # scale_x_discrete(name = '', expand = c(0, 0)) +
     # facet_grid(var ~ project_extended, scale = 'free_y',
     #   labeller = label_parsed()) +
     right_legend +
+    rotate_x_labels(45) +
     xlab(IE_labels[[track_var]])
 
   if (length(response_vars) == 1) {
@@ -2288,7 +2288,8 @@ track_sum_stats_as_function_of_var <- function(
   }
 
   if (length(response_vars) > 1) {
-    p <- p + facet_grid(var ~ project_extended, scale = 'free')
+    p <- p + facet_grid(var ~ project_extended, scale = 'free',
+      labeller = label_parsed)
     w <- 25 / 8 * uniqueN(t_dat$project_extended)
     if (w == 0) return(NULL)
     cat(track_var, 'width:', w, '\n')
@@ -2299,8 +2300,9 @@ track_sum_stats_as_function_of_var <- function(
     w <- 17.4
   }
 
-  print_plot(p, fn = fn, w = w, h = 17)
-  # return(invisible(fn))
+  print_plot_eval(print(p),
+    width = w, height = 17,
+    filename = fn)
 }
 
 
@@ -2474,7 +2476,7 @@ plot_source_data_neg_perm <- function(
     xlab('Source data permutation')
 
   if ('project_extended' %in% colnames(res)) {
-    p <- p + facet_grid(. ~ project_extended, scale = 'free', 
+    p <- p + facet_grid(. ~ project_extended, scale = 'free',
       labeller = label_parsed())
   }
 
@@ -2519,3 +2521,850 @@ bottom_legend <- theme(
   legend.position = 'bottom', legend.justification = c(.5, .5))
 
 no_legend <- theme(legend.position = 'none')
+
+ncat <- function(...) {
+  cat(..., '\n')
+}
+
+calcGseaStat <- function (stats, selectedStats, gseaParam = 1,
+  returnAllExtremes = FALSE,
+    returnLeadingEdge = FALSE, scoreType = c("std", "pos", "neg"))
+{
+    scoreType <- match.arg(scoreType)
+    S <- selectedStats
+    r <- stats
+    p <- gseaParam
+    S <- sort(S)
+    m <- length(S)
+    N <- length(r)
+    if (m == N) {
+        stop("GSEA statistic is not defined when all genes are selected")
+    }
+    rAdj <- abs(r[S])^p
+    NR <- sum(rAdj)
+    if (NR == 0) {
+        rCumSum <- seq_along(rAdj)/length(rAdj)
+    }
+    else {
+        rCumSum <- cumsum(rAdj)/NR
+    }
+    tops <- rCumSum - (S - seq_along(S))/(N - m)
+    if (NR == 0) {
+        bottoms <- tops - 1/m
+    }
+    else {
+        bottoms <- tops - rAdj/NR
+    }
+    maxP <- max(tops)
+    minP <- min(bottoms)
+    switch(scoreType,
+      std = geneSetStatistic <- ifelse(maxP == -minP, 0,
+        ifelse(maxP > -minP, maxP, minP)),
+      pos = geneSetStatistic <- maxP,
+      neg = geneSetStatistic <- minP)
+    if (!returnAllExtremes && !returnLeadingEdge) {
+        return(geneSetStatistic)
+    }
+    res <- list(res = geneSetStatistic)
+    if (returnAllExtremes) {
+        res <- c(res, list(tops = tops, bottoms = bottoms))
+    }
+    if (returnLeadingEdge) {
+        leadingEdge <- if (maxP > -minP) {
+            S[seq_along(S) <= which.max(bottoms)]
+        }
+        else if (maxP < -minP) {
+            rev(S[seq_along(S) >= which.min(bottoms)])
+        }
+        else {
+            NULL
+        }
+        res <- c(res, list(leadingEdge = leadingEdge))
+    }
+    res
+}
+
+
+#' Test factor enrichment
+#'
+#' Test enrichment of a discrete variable's level among the top or
+#' bottom of a rank-ordered list
+test_fe <- function(
+  dtf,
+  vn = 'focus_allele',
+  reverse = FALSE) {
+  # library(fgsea)
+  if (!vn %in% colnames(dtf)) return(NULL)
+
+  if (is.factor(dtf[[vn]])) {
+    levs <- levels(dtf[[vn]]) %>%
+      { setNames(., .) }
+    levs <- levs[names(which(table(dtf[[vn]]) > 0))]
+  } else {
+    levs <- unique(dtf[[vn]]) %>%
+      { setNames(., .) } %>%
+      sort()
+  }
+
+  stopifnot(is.logical(reverse))
+
+  out <-
+    purrr::map_dbl(levs, function(lev) {
+    suppressWarnings(calcGseaStat(
+      # stats = setNames(1:nrow(dtf), dtf[[vn]]),
+      # stats = as.integer(dtf[[vn]]),
+      stats = if (!reverse) nrow(dtf):1 else 1:nrow(dtf),
+      # stats = nrow(dtf):1,
+      selectedStats = which(dtf[[vn]] == lev),
+      # scoreType = 'pos'
+      scoreType = 'std'
+    ))}) %>%
+    tibble::enframe(vn, 'ES') %>%
+    dplyr::mutate(ES = ES - mean(ES)) %>%
+    dplyr::arrange(desc(ES)) %>%
+    { . }
+
+  return(out)
+}
+# test_fe()
+
+
+test_fe_dtf <- function(dtf, id_vars, reverse = F) {
+  dtf_o <-
+    dtf[, median(delta_n),
+      by = setdiff(id_vars, 'project_extended')][order(V1)]
+
+  if (F) {
+    sort(compute_median_rank(dtf_o, 'focus_allele'))
+    sort(compute_median_rank(dtf_o, 'analysis_name'))
+    sort(compute_median_rank(dtf_o, 'LOH_HLA'))
+    sort(compute_median_rank(dtf_o, 'overlap_var'))
+    sort(compute_median_rank(dtf_o, 'patient_inclusion_crit'))
+  }
+
+  dtf_o <-
+    dtf_o %>%
+    # dplyr::filter(abs(V1) <= 1) %>%
+    .[, median(V1), by = setdiff(colnames(dtf_o), 'V1')] %>%
+    .[order(V1)] %>%
+    { . }
+
+  if (any(!colnames(ds_param_grid) %in% colnames(dtf_o))) {
+    dtf_o <- maartenutils::clean_columns(fh = dtf_o,
+      col_names = colnames(ds_param_grid))
+    dtf_o <- cbind(dtf_o, ds_param_grid[dtf_o[, analysis_idx], ])
+  }
+
+  ET <-
+    setdiff(id_vars, 'analysis_idx') %>%
+    auto_name() %>%
+    purrr::map(function(vn) {
+      output <- tryCatch(
+        test_fe(vn = vn, dtf = dtf_o, reverse = reverse),
+        error = function(e) { NULL })
+      output
+    }) %>%
+    purrr::discard(is.null)
+
+  return(ET)
+}
+
+
+CV_editing <- function(
+    dtf = f_setting_dtf,
+    tt = 'Thyroid',
+    id_vars = c(CV_IE_settings, 'analysis_idx'),
+    verbose = T,
+    reverse = F
+  ) {
+
+  all_tts <- setdiff(levels(dtf$project_extended),
+    "Pan*'-'*cancer") %>%
+    maartenutils::auto_name()
+
+  other_tts <- setdiff(all_tts, c(tt, "Pan*'-'*cancer"))
+
+  if (TRUE) {
+    ## Limit to settings that are observed both within the tumor type
+    ## in question and the combination of all the other tumor types
+    min_N <- 100
+    l_id_vars <- setdiff(id_vars, 'project_extended')
+    tallies <- map(list(tt, other_tts), 
+      function(.x) {
+        dtf_l <- dtf[project_extended %in% .x]
+        ## Also require each level to be observed at least min_N times
+        ## al := abandoned levels
+        al <- perform_settings_tally(dtf_l, l_id_vars)[N < min_N]
+
+        out <- dtf_l[, .N, by = l_id_vars]
+        if (!maartenutils::null_dat(al)) {
+          for (i in seq(1, nrow(al))) {
+            # out <- out[get(al$var[i]) != al$lev[i]]
+            clev <- as.character(al$lev[i])
+            if (is.na(clev)) browser()
+            out <- out[get(al$var[i]) != clev]
+            # out[get(al$var[i]) == al$lev[i]]
+          }
+        }
+
+        out$N <- NULL
+        return(out)
+      })
+
+    combined_observed_settings <- 
+      dplyr::inner_join(tallies[[1]], tallies[[2]], by = l_id_vars)
+
+    # table(dtf$RNA_expression)
+    # table(combined_observed_settings$RNA_expression)
+    setkeyv(dtf, l_id_vars)
+    dtf <- dtf[combined_observed_settings]
+  }
+
+  dtf_i <- dtf[project_extended == tt]
+  dtf_o <- dtf[project_extended %in% other_tts]
+
+  ET_o <- test_fe_dtf(dtf_o, id_vars = id_vars, reverse = reverse)
+
+  if (!length(ET_o)) {
+    stop('No enrichment found at all')
+  }
+
+  ## Sort by max ES such that we will prioritize the strongest ES's
+  ## when filtering
+  ET_o <- ET_o[rev(order(map_dbl(ET_o, ~dplyr::slice_head(.x, n = 1)$ES)))]
+  # ET_o['patient_inclusion_crit']
+  # table(dtf_i[['patient_inclusion_crit']])
+
+  ET_f <-
+    purrr::map(ET_o, function(.x) {
+      # dplyr::filter(.x, ES >= .05) %>%
+      # dplyr::filter(.x, ES >= .025) %>%
+      dplyr::filter(.x, ES >= .2) %>%
+      dplyr::slice_head(n = 1)
+    }) %>%
+    purrr::keep(~nrow(.x) > 0) %>%
+    map(~unlist(.x[, 1])) %>%
+    { . }
+  ## Manually exclude the focus allele from being a filtering
+  ## criterion
+  ET_f[['focus_allele']] <- NULL
+
+  if (verbose) {
+    print(tt)
+    print(ET_f)
+  }
+
+  # n_subs_uf <- dtf[!project_extended %in% tt]
+  # subs_uf <- copy(dtf[project_extended %in% tt])
+  # table(subs_uf$VE_threshold)
+  # table(n_subs_uf$VE_threshold)
+
+  subs <- copy(dtf_i)
+  if (length(ET_f) > 0) {
+    for (i in 1:length(ET_f)) {
+      idx <- which(subs[[names(ET_f)[i]]] == unlist(ET_f[[i]]))
+      if (length(idx) > 0) {
+        subs <- subs[idx, ]
+      } else {
+        if (verbose) {
+          cat('Filtering issue. No entries for', tt,
+            names(ET_f)[i], ET_f[[i]], '\n')
+        }
+      }
+    }
+    ## Inside tumor type (i) and selected (s)
+    dtf_i_s <- subs
+    dtf_i_s$type = 'Selected'
+    ## ... unselected (us)
+    dtf_i_us <- dtf_i[!unique(subs[, ..id_vars])]
+  } else {
+    dtf_i_s <- NULL
+    dtf_i_us <- dtf_i
+  }
+  dtf_i_us$type = 'Unselected'
+
+  # table(subs$RNA_expression)
+  if (verbose) {
+    if (!null_dat(dtf_i_s)) {
+      print(dtf_i_s[, summary(delta_n)])
+    }
+    print(dtf_i_us[, summary(delta_n)])
+  }
+
+  if (F) {
+    ## This may change column types
+    setkeyv(subs_uf, id_vars)
+    stopifnot(subs_uf[unique(subs[, ..id_vars]), .N] == nrow(subs))
+  }
+
+  ET_i <- test_fe_dtf(dtf_i, id_vars = id_vars, reverse = reverse)
+  if (F) {
+    stopifnot(is.null(subs$type))
+    subs <- subs[, !duplicated(colnames(subs)), with = F]
+    subs_uf <- subs_uf[, !duplicated(colnames(subs_uf)), with = F]
+    which(map_chr(subs, class) != map_chr(subs_uf, class))
+  }
+
+  out <- list(
+    'dtf' =
+      dplyr::bind_rows(dtf_i_s, dtf_i_us) %>%
+      dplyr::mutate(
+        ranking = c('top', 'bottom')[as.integer(reverse)+1]),
+    'ET_o' = ET_o,
+    'ET_i' = ET_i
+  )
+
+  return(out)
+}
+
+
+compute_median_rank <- function(dtf, vn, f = median) {
+  tapply(1:nrow(dtf), dtf[[vn]], f)
+}
+
+
+median_based_ranking <- function(dtf = analysis_idx_o, vn = 'LOH_HLA') {
+  medians <- sort(compute_median_rank(dtf, vn))
+  (medians[1] - medians[2]) / nrow(dtf)
+}
+
+
+#' Turn an enrichment table into a grob
+ET2grob <- function(ET) {
+  if (is.null(ET)) return(NULL)
+  ET_print <-
+    ET %>%
+      purrr::discard(null_dat) %>%
+      purrr::keep(~any(abs(.x$ES) > .05)) %>%
+      imap(~bind_cols(
+          type = c(.y, base::rep('', nrow(.x)-1)), .x)) %>%
+      purrr::imap_dfr(function(.x, .y) {
+        colnames(.x)[2] <- 'level'
+        .x
+      }) %>%
+      # dplyr::mutate(col = 'dark') %>%
+      # dplyr::mutate(seq_along(which(type != '')) %% 2)
+      { . }
+
+  p <-
+    gridExtra::tableGrob(
+      ET_print, rows = NULL,
+      theme = gridExtra::ttheme_default(base_size = 6)
+    )
+
+  return(p)
+}
+
+
+#' Enrichment table to data.frame
+#'
+#' Convert list of enrichment factor tables to a single table
+ET2dtf <- function(ET, ES_name = 'ET_i') {
+  ET %>%
+    imap(~bind_cols(type = rep(.y, nrow(.x)), .x)) %>%
+    purrr::imap_dfr(function(.x, .y) {
+      colnames(.x)[2] <- 'level'
+      .x
+    }) %>%
+    dplyr::rename({{ES_name}} := ES) %>%
+    { . }
+}
+
+
+compile_arg_string <- function(v) {
+  stopifnot(is.list(v))
+  stopifnot(!is.null(names(v)))
+  purrr::imap_chr(v, ~glue('{.y}={.x}')) %>% paste(collapse = '-')
+}
+
+plot_delta_overview <- function(
+  t_dat,
+  version_string =
+    compile_arg_string(attr(t_dat, 'filtering_args')),
+  fn = file.path(IE_img_dir,
+    glue::glue('{datef}_filtered_overview_{version_string}.pdf'))) {
+
+  p_dat <-
+    t_dat %>%
+    dplyr::mutate(project_extended =
+      forcats::fct_rev(project_extended)) %>%
+    { . }
+
+  # max_median_delta_n <-
+  #   max(p_dat[, abs(median(delta_n)), by = project_extended]$V1)
+  # max_median_delta_n <-
+  #   max(p_dat[, max(abs(quantile(delta_n, c(.1, .9)))),
+  #     by = project_extended]$V1)
+  max_median_delta_n <-
+    max(p_dat[, max(abs(quantile(delta_n, c(.25, .75)))),
+      by = project_extended]$V1)
+  # p_dat$project_extended
+
+  p1 <-
+    ggplot(p_dat, aes(y = project_extended, x = delta_n)) +
+    geom_vline(xintercept = 0) +
+    # geom_violin(draw_quantiles = c(.25, .5, .75),
+    #   # color = 'indianred3',
+    #   # fill = 'indianred3',
+    #   # show.legend = FALSE,
+    #   alpha = .2) +
+    geom_boxplot(outlier.shape = NA) +
+    # stat_summary(
+    #   fun = 'median', colour = 'indianred3',
+    #   geom = 'point',
+    #   size = .2,
+    #   show.legend = FALSE
+    # ) +
+    coord_cartesian(xlim = max_median_delta_n * c(-1, 1) * 1.05) +
+    # scale_x_discrete(name = expression(Delta[n])) +
+    xlab(expression(Delta[n])) +
+    scale_y_discrete(
+      name = '',
+      # labels = parse(text = levels(p_dat$project_extended))) +
+      labels = function(v) parse(text = v)) +
+    theme()
+
+  print_plot_eval(print(p1),
+    width = 8.7, height = 10,
+    filename = fn)
+}
+
+
+plot_p_overview <- function(
+  t_dat,
+  version_string =
+    compile_arg_string(attr(t_dat, 'filtering_args')),
+  fn = file.path(IE_img_dir,
+    glue::glue('{datef}_p_overview_{version_string}.pdf'))) {
+
+  max_median_delta_n <-
+    max(t_dat[, max(abs(quantile(delta_n, c(.25, .75)))),
+      by = project_extended]$V1)
+
+  p1 <- t_dat[, .N,
+    keyby = .(project_extended,
+      # 'sign' = sign(delta_n),
+      'sign' = cut(
+        delta_n,
+        breaks = sort(unique(c(0, seq(-max_median_delta_n,
+          max_median_delta_n, length.out = 7))))
+      ),
+      'p_val_bin' = cut(p_val, c(0, 0.05, 1)))] %>%
+    .[!is.na(sign)] %>%
+      # 'p_val_bin' = cut(p_val, seq(0, 1, by = .05)))] %>%
+    # { . } %>%
+    .[p_val_bin == '(0.05,1]', N := N/19] %>%
+    # as_tibble() %>%
+    # dplyr::mutate(N = case_when(
+    #   p_val_bin == '(0.05,1]' ~ N / 19,
+    #   TRUE ~ N,
+    # )) %>%
+    # { . }
+    # .[, 'x_var' := paste0(p_val_bin)] %>%
+    # .[, 'sign' := factor(sign, levels = c(-1, 1),
+    #   labels = c('editing', 'enrichment'))] %>%
+    ggplot(aes(x = sign, y = N, fill = p_val_bin)) +
+      geom_col() +
+      facet_wrap(~project_extended, labeller = label_parsed) +
+      theme(legend.position = 'right') +
+      rotate_x_labels(45) +
+      scale_fill_discrete(name = 'Binned p-value') +
+      xlab('Sign of delta') +
+      ylab('# sub-analyses')
+
+  print_plot_eval(print(p1),
+    width = 17.4, height = 10,
+    filename = fn)
+}
+
+
+param_sensitivity <- function(dtf,
+  method = 'iqr',
+  fn = file.path(IE_img_dir,
+    glue::glue('cov_parameter_sensitivity.pdf'))) {
+
+  p_dat <- id_vars %>%
+    # setdiff('project_extended') %>%
+    setdiff('tumor_type') %>%
+    purrr::map_dfr(function(c_var) {
+      # c_var = 'z_normalize'
+      # c_var = 'project_extended'
+      # c_var = 'analysis_name'
+
+      l_id_vars <- id_vars %>%
+        setdiff(c_var) %>%
+        setdiff('tumor_type') %>%
+        # c('project_extended') %>%
+        unique()
+
+      t_dat <- subset_subanalysis_groups(
+        t_dat = dtf[!is.na(delta_n)],
+        id_vars = l_id_vars)
+
+      if (method == 'cov') {
+        t_dat <- t_dat[,
+          .(
+            # 'cov' = sd(delta_n, na.rm = T) / mean(delta_n, na.rm = T),
+            'cov_n' = sd(delta_n, na.rm = T) /
+              abs(mean(delta_n, na.rm = T)),
+            'N' = .N), keyby = l_id_vars]
+      } else if (method == 'iqr') {
+        t_dat <- t_dat[,
+          .(
+            # 'cov' = sd(delta_n, na.rm = T) / mean(delta_n, na.rm = T),
+            # 'cov_n' = sd(delta_n, na.rm = T) /
+            #   abs(mean(delta_n, na.rm = T)),
+            'cov_n' = IQR(delta_n, na.rm = T) /
+              abs(median(delta_n, na.rm = T)),
+            'N' = .N), keyby = l_id_vars]
+      }
+
+      ## Debug
+      if (F && c_var == 'analysis_name') {
+        pick <- t_dat[N == 5][1]
+        setkeyv(dtf, intersect(colnames(dtf), colnames(pick)))
+        setkeyv(pick, intersect(colnames(dtf), colnames(pick)))
+        setkeyv(setting_dtf, intersect(colnames(dtf), colnames(pick)))
+        ## They're all the same, strange..!
+        dtf[pick]
+        setting_dtf[pick]
+
+        source(file.path(IE_root, 'continuous_IE_detection_init.R'))
+        call_func(test_continuous_IE, as.list(pick))
+
+        # call_args(test_continuous_IE
+
+      } else {
+        t_dat <- maartenutils::clean_columns('', t_dat, l_id_vars)
+      }
+
+
+      # table(dtf$project_extended)
+      # any(t_dat$N > 1)
+      if (all(is.na(t_dat$cov_n))) return(NULL)
+      # summary(t_dat$cov)
+      t_dat$var <- c_var
+      return(t_dat)
+    })
+  # summary(p_dat$N)
+
+  setDT(p_dat)
+  var_titles_l <- setNames(names(var_titles), var_titles)
+  p_dat$var_print <- forcats::fct_recode(p_dat$var, !!!var_titles_l)
+  # p_dat[, mean(cov, na.rm = T), by = var]
+  # p_dat[, quantile(cov, .9, na.rm = T), by = var]
+  p_dat$var_print <-
+    factor(p_dat$var_print,
+      levels = p_dat[, quantile(cov_n, .5, na.rm = T), by =
+        var_print][order(V1)]$var_print)
+
+  # unique(p_dat$var)
+
+  if (F) {
+    p_dat[, quantile(cov_n, .99, na.rm = T), keyby = var_print][order(V1)]
+    p_dat[, quantile(cov_n, .75, na.rm = T), keyby = var_print][order(V1)]
+
+    v = 'analysis_name'
+    l_p_dat <- p_dat[var %in% v]
+    table(l_p_dat$N)
+    summary(l_p_dat$cov_n)
+    l_p_dat[N == 5]
+    print_plot_eval(with(l_p_dat, plot(cov_n, N)),
+      width = 17.4, height = 10,
+      filename = file.path(IE_img_dir, 'test.pdf'))
+  }
+
+  eps = .001
+  eps = .01
+  eps = .1
+  eps = .05
+  eps = .025
+
+  max_x <- p_dat[, quantile(cov_n, .75, na.rm = T),
+    by = var_print][, max(V1) * 1.1]
+  # unique(p_dat$var)
+  p <-
+    # list(c('project_extended'),
+    #   setdiff(unique(p_dat$var), 'project_extended')) %>%
+    IE_var_groups %>%
+    purrr::imap(function(v, i) {
+      # v = 'overlap_var'
+      l_p_dat <- p_dat[var %in% v]
+      setDT(l_p_dat)
+      # summary(l_p_dat$cov_n)
+      # max_x <- l_p_dat[, quantile(cov_n, .75, na.rm = T),
+      #   by = var_print][, max(V1) * 1.1]
+      # print(max_x)
+      p <- ggplot(l_p_dat,
+        aes(y = var_print, x = cov_n)) +
+        # geom_violin(
+        #   # adjust = .1,
+        #   bw = 1e-6,
+        # #   draw_quantiles = c(.25, .5, .75)) +
+        #   draw_quantiles = c(.10, .5, .9)) +
+        # geom_vline(xintercept = 0) +
+        coord_cartesian(
+          # xlim = quantile(p_dat$cov_n, c(eps, 1-eps), na.rm = T)
+          # xlim = c(0, quantile(l_p_dat$cov, 1-eps, na.rm = T))
+          xlim = c(0, max_x)
+        ) +
+        geom_boxplot(outlier.shape = NA, fill = IE_pal[1], alpha = 1) +
+        xlab('') +
+        ylab('') +
+        theme()
+        # ylab('Variable')
+      if (i == last(names(IE_var_groups))) {
+        p <- p + xlab('Coefficient of variation')
+      }
+      return(p)
+    })
+
+  library(patchwork)
+  print_plot_eval(print(wrap_plots(p, ncol = 1,
+        heights = map_dbl(IE_var_groups, length) %>% { ./sum(.) }
+        # heights = c(.1, .9)
+    )),
+    width = 8.7,
+    height = 15,
+    filename = fn)
+
+}
+
+
+filtering <- function(dtf, args_list = NULL) {
+  dtf <- purrr::exec(filter_coef_overview,
+    dtf = dtf,
+    # min_patients = 20,
+    print_messages = T, !!!args_list
+  )
+  attr(dtf, 'filtering_args') <- args_list
+  return(dtf)
+}
+
+
+row2list <- function(pick) {
+  dput(map(pick, ~ifelse(is.factor(.x), as.character(.x), .x)))
+}
+
+
+IE_var_groups <- list(
+ 'tumor_type' = 'project_extended',
+ 'general' = c('focus_allele', 'overlap_var'),
+ 'patient_inclusion' = c('patient_inclusion_crit', 'LOH_HLA'),
+ 'variant_selection' = c('analysis_name'),
+ 'neo_antigen_prediction' = c('expression_threshold',
+   'VE_threshold', 'sts_filtering', 'RNA_expression',
+   'percentile_rank')
+)
+
+
+annotate_IE_var_groups <- function(dtf) {
+  setDT(dtf)
+  dtf[, 'var_group' := '']
+  for (vg in names(IE_var_groups)) {
+    dtf[type %in% IE_var_groups[[vg]], 'var_group' := rep(vg, .N)]
+  }
+  return(dtf)
+}
+
+
+plot_subanalysis <- function(pick, 
+  f = pryr::partial(fit_glm_log_, 
+    simple_output = TRUE,
+    fit_CYT = FALSE, fit_offset = TRUE, fit_PS = TRUE),
+  f_alt = pryr::partial(fit_glm_log_, 
+    simple_output = TRUE,
+    fit_CYT = FALSE, fit_offset = TRUE, fit_PS = FALSE)) {
+  args <- pick %>%
+    pan_IE_res_to_call_args() %>%
+    { . }
+  prep1 <- call_func(prep_cont_IE_analyses,
+    modifyList(args, list('permute_y' = F)))
+  dtf <- prep1$dtf
+
+  fit <- f(dtf)
+  fit_alt <- f_alt(dtf)
+
+  if (F && !is.null(pick$delta)) {
+    stopifnot(fit$delta == pick$delta)
+  }
+
+  p1 <- ggplot(fit$data,
+    aes(x = i, y = c, colour = ol)) +
+    ggrastr::rasterise(geom_point(alpha = .3), dpi = 300)
+
+  if (all(names(coef(fit)) == c('(Intercept)',  'i', 'i:ol'))) {
+    p1 <- p1 +
+      geom_abline(
+        intercept = coef(fit)[['(Intercept)']],
+        slope = coef(fit)[['i']],
+        colour = 'grey10'
+      ) +
+      geom_abline(
+        intercept = coef(fit)[['(Intercept)']],
+        slope = coef(fit)[['i']] + coef(fit)[['i:ol']],
+        colour = 'purple'
+      ) +
+      theme(legend.position = 'right') +
+      theme()
+
+    if (F) {
+      ## Sanity checks
+      yhat1 <- unname(predict(fit))
+      yhat2 <- coef(fit)[['(Intercept)']] +
+        coef(fit)[['i']] * fit$data$i +
+        coef(fit)[['i:ol']] * fit$data$i * fit$data$ol
+      stopifnot(maartenutils::eps(yhat1, yhat2))
+      stopifnot(maartenutils::eps(residuals(fit),
+          fit$data$c - yhat2))
+    }
+
+    if (F) {
+      yhat_basic <- coef(fit)[['(Intercept)']] +
+        coef(fit)[['i']] * fit$data$i
+      yhat_ps <- yhat_basic +
+        coef(fit)[['i:ol']] * fit$data$i * fit$data$ol
+      fit$data$improv <- 
+        with(fit$data, (yhat_ps - yhat_basic) / yhat_basic)
+    } else {
+      fit$data$improv <- 
+        (residuals(fit) - residuals(fit_alt)) / residuals(fit_alt)
+      # mean(residuals(fit_alt)) - mean(residuals(fit))
+      # summary(fit$data$improv)
+      # deviance(fit) - deviance(fit_alt)
+    }
+
+    p_eps = .03
+    fit$data$ol_b <- cut(fit$data$ol, seq(0, 1, by = .25))
+    fit$data$ol_b <- cut(fit$data$ol, seq(0, 1, by = .1))
+    p2 <- ggplot(fit$data, aes(x = ol_b, y = improv)) +
+      geom_boxplot() +
+      coord_cartesian(
+        # ylim = c(quantile(fit$data$improv, p_eps), 0)
+        ylim = quantile(fit$data$improv, c(p_eps, 1-p_eps))
+      ) +
+      theme(legend.position = 'right') +
+      # gg_tabula_rasa +
+      scale_y_continuous(
+        name = 'Fractional change in residuals', 
+        expand = c(0, 0)
+      ) +
+      scale_x_discrete(name = 'Binned presentation score', 
+        expand = c(0, 0)) +
+      theme()
+    if (F) {
+      print_plot_eval(print(p2),
+        width = 17.4, height = 10,
+        filename = file.path(IE_img_dir, 'test_residuals.pdf'))
+    }
+
+    p3 <- ggplot(fit$data, aes(x = ol, y = improv)) +
+      # geom_abline(intercept = 0, slope = 1) +
+      geom_hline(yintercept = 0) +
+      geom_vline(xintercept = 0) +
+      geom_density_2d_filled(show.legend = FALSE) +
+      ggrastr::rasterise(
+        geom_point(alpha = .5, colour = 'grey90'), dpi = 300) +
+      scale_colour_viridis_c() +
+      coord_cartesian(
+        # ylim = c(quantile(fit$data$improv, p_eps), 0)
+        ylim = quantile(fit$data$improv, c(p_eps, 1-p_eps))
+      ) +
+      # geom_smooth(span = 100) +
+      theme(legend.position = 'right') +
+      scale_x_continuous(name = 'Presentation score', 
+        expand = c(0, 0)) +
+      scale_y_continuous(
+        name = 'Fractional change in residuals', 
+        expand = c(0, 0)
+      ) +
+      theme()
+    if (F) {
+      print_plot_eval(print(p3),
+        width = 17.4, height = 10,
+        filename = file.path(IE_img_dir, 'test_residuals.pdf'))
+    }
+
+  } else {
+    rlang::abort('Unrecognized fit object')
+  }
+
+  if (F && !is.null(pick$perm_rc_median)) {
+    p1 <- p1 +
+      geom_abline(
+        intercept = fit$offset - pick$perm_offset_median,
+        slope = (fit$intercept - pick$perm_intercept_median) +
+          (fit$rc - pick$perm_rc_median),
+        colour = 'red'
+      )
+  }
+
+  return(list(p1, p2, p3))
+}
+
+
+perform_settings_tally <- function(dtf, id_vars) {
+  if (maartenutils::null_dat(dtf)) return(NULL)
+  setDT(dtf)
+
+  ## Assume all possible levels are observed at least once
+  total_N <-
+    prod(map_dbl(id_vars, function(v) dtf[, uniqueN(get(v))]))
+
+  out <- 
+    purrr::map(id_vars, function(lv) {
+      N_levs <- dtf[, uniqueN(get(lv))]
+      if (N_levs == 1) return(NULL)
+      dtf[, .(
+        'var' = lv, 
+        'N' = .N,
+        'frac_observed' = .N * N_levs / total_N),
+        keyby = c('lev' = lv)] %>%
+        .[, 'lev' := get(lv)] %>%
+        .[, (lv) := NULL]
+    }) %>%
+    purrr::discard(is.null) %>%
+    rbindlist() %>%
+    { . }
+
+  return(out)
+}
+
+
+#' As the VE_threshold and expression_threshold variables are mutually
+#' exclusive (one and/or the other is 'none' is always true), combine
+#' them into a single variable
+#'
+#'
+recode_RNA_expression <- function(dtf) {
+  setDT(dtf)
+  vns <- c('expression_threshold', 'VE_threshold')
+  prefixes <- c('TPM=', 'VE=')
+
+  for (i in seq_along(vns)) {
+    new_levs <- 
+      levels(dtf[, get(vns[i])]) %>%
+      setdiff('none') %>%
+      { setNames(., paste0(prefixes[i], .)) } %>%
+      { c('none' = 'none', .) }
+    dtf[, (vns[i]) := forcats::fct_recode(get(vns[i]), !!!new_levs)]
+    # levels(dtf[[vns[i]]])
+    # dtf[, table(get(vns[i]))]
+  }
+
+  dtf[, 'RNA_expression' := ifelse(
+    expression_threshold != 'none',
+    as.character(expression_threshold), 
+    ifelse(VE_threshold != 'none', as.character(VE_threshold), 'none'))]
+  levs <- c(levels(dtf$expression_threshold), 
+    levels(dtf$VE_threshold)) %>% unique()
+  dtf[, 'RNA_expression' := factor(as.character(RNA_expression), 
+    levels = levs)]
+
+  if (F) {
+    with(dtf, table(RNA_expression, VE_threshold))
+    with(dtf, table(RNA_expression, expression_threshold))
+  }
+
+  return(dtf)
+}

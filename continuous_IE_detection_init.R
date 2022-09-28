@@ -40,6 +40,8 @@ all_cont_IE_settings <- tidyr::expand_grid(
 if (exists('setMKLthreads')) setMKLthreads(1)
 stopifnot(test_dplyr())
 
+datef <- format(Sys.time(), '%Y%m%d')
+
 if (F) {
   datef <- format(Sys.time(), '%Y%m%d')
   pacman::p_load('lme4')

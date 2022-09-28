@@ -37,7 +37,10 @@ filter_coef_overview_ <- function(dtf, code,
 
   if (!print_messages) return(dtf)
 
-  stats <- map_dfr(names(comp_before), function(n) {
+  cat('Overall decrease: ', 1-mean(bools), '\n\n')
+
+  stats <- 
+    purrr::map_dfr(names(comp_before), function(n) {
       out <- merge(comp_before[[n]], comp_after[[n]], by = n)
       out$log2_fc <- log2(out[, 3]) - log2(out[, 2])
       out$diff_evenness <- compute_evenness(-out$log2_fc)
@@ -71,7 +74,9 @@ filter_coef_overview <- function(
   force_positive_intercept = F,
   force_intercept_ge_rc = F,
   min_patients = NULL,
+  min_nz_patients = NULL,
   min_project_size = NULL,
+  max_delta_n_cov = NULL,
   intercept_filter_p_val = NULL,
   intercept_filter_magnitude = NULL,
   force_sensible_perm_delta_CI = F,
@@ -91,6 +96,17 @@ filter_coef_overview <- function(
   adaptive_delta_mean_c_SE_filter = FALSE,
   adaptive_norm_scale_filter = FALSE) {
 
+  stopifnot(!any(duplicated(colnames(dtf))))
+
+  ## VE-threshold of 5 leads to ~0 intercept
+  dtf <- dtf[VE_threshold != '5']
+  dtf[, VE_threshold := droplevels(VE_threshold)]
+
+  # dtf <- dtf[, !duplicated(colnames(dtf)), with = F]
+  if ('delta_n' %in% colnames(dtf)) {
+    dtf <- dtf[order(delta_n), ]
+  }
+
   if (null_dat(dtf)) {
     message('No rows before filtering')
     return(NULL)
@@ -107,6 +123,20 @@ filter_coef_overview <- function(
       stage_id = 'Filtering non-converged sub-analyses'
     )
 
+  if (!is.null(max_delta_n_cov)) {
+    dtf <- filter_coef_overview_(
+      dtf = dtf,
+      print_messages = print_messages,
+      code = delta_n_cov <= max_delta_n_cov
+    )
+    if (print_messages)
+      print_overview_stats(
+        dtf = dtf,
+        plot_fishtails = plot_fishtails,
+        stage_id = 'Delta cov filtering'
+      )
+  }
+
   if (!is.null(intercept_filter_p_val)) {
     dtf <- filter_coef_overview_(
       dtf = dtf,
@@ -117,7 +147,7 @@ filter_coef_overview <- function(
       print_overview_stats(
         dtf = dtf,
         plot_fishtails = plot_fishtails,
-        stage_id = 'After intercept p-val filtering'
+        stage_id = 'Intercept p-val filtering'
       )
   }
 
@@ -130,7 +160,7 @@ filter_coef_overview <- function(
     if (print_messages)
       print_overview_stats(dtf,
         plot_fishtails = plot_fishtails,
-        stage_id = 'After intercept magnitude filtering'
+        stage_id = 'Intercept magnitude filtering'
       )
   }
 
@@ -420,6 +450,24 @@ filter_coef_overview <- function(
       )
   }
 
+  ## Apply these filters after all others to ensure we're counting
+  ## 'valid' analyses rather than 'all' analyses
+  # summary(dtf$n_nz_patients)
+  if (!is.null(min_nz_patients) &&
+      any(min_nz_patients > dtf$n_nz_patients)) {
+    dtf <- filter_coef_overview_(
+      dtf = dtf,
+      print_messages = print_messages,
+      code = n_nz_patients >= min_nz_patients
+    )
+    if (print_messages)
+      print_overview_stats(dtf,
+        plot_fishtails = plot_fishtails,
+        stage_id = 'Filtering minimum number of pts per analysis'
+      )
+  }
+
+
   if (!is.null(min_project_size)) {
     project_counts <- dtf[, .N, by = project_extended]
     allowed_projects <-
@@ -435,12 +483,16 @@ filter_coef_overview <- function(
         error_var = 'norm_scale'),
       by = .(tumor_type, project_extended)] %>%
       .[order(V1), .(project_extended, tumor_type, V1)]
-  } else if ('perm_delta_mean_pc' %in% colnames(dtf)) {
+  } else if (F && 'perm_delta_mean_pc' %in% colnames(dtf)) {
     pe <- dtf[, mean(perm_delta_mean_pc),
       by = .(tumor_type, project_extended)] %>%
       .[order(V1), .(project_extended, tumor_type, V1)]
-  } else if ('delta' %in% colnames(dtf)) {
+  } else if (F && 'delta' %in% colnames(dtf)) {
     pe <- dtf[, mean(delta),
+      by = .(tumor_type, project_extended)] %>%
+      .[order(V1), .(project_extended, tumor_type, V1)]
+  } else if ('delta_n' %in% colnames(dtf)) {
+    pe <- dtf[, median(delta_n),
       by = .(tumor_type, project_extended)] %>%
       .[order(V1), .(project_extended, tumor_type, V1)]
   }
