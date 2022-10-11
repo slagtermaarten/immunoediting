@@ -5,7 +5,14 @@ IE_requires_computation <- mod_time_comparator(
   # minimum_mod_time = '2022-8-25 11:51', verbose = TRUE)
   # minimum_mod_time = '2022-9-13 11:51', verbose = TRUE)
   # minimum_mod_time = '2022-9-14 11:51', verbose = TRUE)
-  minimum_mod_time = '2022-9-21 14:31', verbose = TRUE)
+  # minimum_mod_time = '2022-9-21 14:31', verbose = TRUE)
+  minimum_mod_time = '2022-10-03 14:31', verbose = TRUE)
+# 2022-10-04 16:00 Implemented ACF stuff, but didn't bother to reset
+# timer while only a subset of analyses has run last night as I
+# probably won't need the ACF stuff and will focus on permutatation
+# p-values instead, so about 25% of subanalyses will have ACF now.
+
+N_perms_global = 250
 
 ## {{{ Constants
 scalar_analysis_components <- c('test_yr', 'p_val', 'p_val_no_reg',
@@ -16,7 +23,6 @@ analysis_components <- c(scalar_analysis_components,
   other_analysis_components)
 analysis_grp_vars <- c('overlap_var', 'patient_inclusion_crit',
   'LOH_HLA', 'analysis_name', 'analysis_idx', 'project_extended')
-
 
 tumor_types <- c(
   `Pan*'-'*cancer` = "pan_cancer",
@@ -402,6 +408,11 @@ compute_continuous_IE_statistics <- function(
     f <- glm_fit_model
   } else if (reg_method == 'glm_log') {
     f <- pryr::partial(glm_fit_model, log_transform = T)
+  } else if (reg_method == 'glm_log_CYT') {
+    f <- pryr::partial(glm_fit_model, log_transform = TRUE,
+      fit_CYT = TRUE)
+  } else if (reg_method == 'lmp') {
+    f <- lmp_fit_model
   } else {
     f <- get(reg_method)
   }
@@ -417,8 +428,7 @@ compute_continuous_IE_statistics <- function(
   }
 
   if (TRUE) {
-    ## Append Wilcoxon-test results if that's not all that was asked
-    ## for
+    ## Append general stats
     results <- purrr::map(p_dtf, compute_dtf_stats)
     out <- purrr::map(seq(p_dtf),
       ~c(lm_results[[.x]], results[[.x]])
@@ -795,45 +805,52 @@ fit_rlm_ <- function(dtf, simple_output = F, include_AFDP = F,
 }
 
 
-fit_glm_ <- function(dtf, simple_output = FALSE, 
-  fit_PS = TRUE, fit_offset = FALSE, fit_CYT = F) {
-  dtf <- setDT(dtf)[is.finite(i) & is.finite(c) & is.finite(ol)]
+fit_glm_ <- function(dtf, simple_output = FALSE,
+  fit_PS = TRUE, fit_offset = FALSE,
+  add_resid_ac = FALSE, fit_CYT = F) {
 
+  dtf <- setDT(dtf)[is.finite(i) & is.finite(c) & is.finite(ol)]
   if (!test_data_sufficiency(dtf)) return(NULL)
+
+  if (method == 'glm') {
+    fit_func <- stats::glm
+  } else {
+    fit_func <- pryr::partial(lmPerm::lmp, scale = F)
+  }
 
   if (fit_PS) {
     if (fit_CYT) {
       if (fit_offset) {
-        fit <- tryCatch(stats::glm(c~1+i+i:ol+CYT, data = dtf),
+        fit <- tryCatch(fit_func(c~1+i+i:ol+CYT, data = dtf),
           error = function(e) { NULL })
       } else {
-        fit <- tryCatch(stats::glm(c~0+i+i:ol+CYT, data = dtf),
+        fit <- tryCatch(fit_func(c~0+i+i:ol+CYT, data = dtf),
           error = function(e) { NULL })
       }
     } else {
       if (fit_offset) {
-        fit <- tryCatch(stats::glm(c~1+i+i:ol, data = dtf),
+        fit <- tryCatch(fit_func(c~1+i+i:ol, data = dtf),
           error = function(e) { NULL })
       } else {
-        fit <- tryCatch(stats::glm(c~0+i+i:ol, data = dtf),
+        fit <- tryCatch(fit_func(c~0+i+i:ol, data = dtf),
           error = function(e) { NULL })
       }
     }
   } else {
     if (fit_CYT) {
       if (fit_offset) {
-        fit <- tryCatch(stats::glm(c~1+i+CYT, data = dtf),
+        fit <- tryCatch(fit_func(c~1+i+CYT, data = dtf),
           error = function(e) { NULL })
       } else {
-        fit <- tryCatch(stats::glm(c~0+i+CYT, data = dtf),
+        fit <- tryCatch(fit_func(c~0+i+CYT, data = dtf),
           error = function(e) { NULL })
       }
     } else {
       if (fit_offset) {
-        fit <- tryCatch(stats::glm(c~1+i, data = dtf),
+        fit <- tryCatch(fit_func(c~1+i, data = dtf),
           error = function(e) { NULL })
       } else {
-        fit <- tryCatch(stats::glm(c~0+i, data = dtf),
+        fit <- tryCatch(fit_func(c~0+i, data = dtf),
           error = function(e) { NULL })
       }
     }
@@ -860,32 +877,35 @@ fit_glm_ <- function(dtf, simple_output = FALSE,
     ) %>% { . }
 
   ## This is rather fugly, but pragmatic..?
+  p_index = 4
+  t_index = 3
+  rwNULL <- function(x) tryCatch(x, error = function(e) { NULL })
   if (fit_PS) {
     if (fit_CYT) {
       if (fit_offset) {
         out <- c(out, list(
           'offset' = coef_mat[1, 1],
           'intercept' = coef_mat[2, 1],
-          'p_val_intercept' = coef_mat[2, 4],
+          'p_val_intercept' = coef_mat[2, p_index],
           'rc' = coef_mat[3, 1],
           'rc_CYT' = coef_mat[4, 1],
           ## Should be in range [-1, 0]
           'delta' = coef_mat[3, 1] / coef_mat[2, 1],
-          'p_val' = coef_mat[3, 4],
-          'p_val_CYT' = coef_mat[4, 4],
-          't_val' = coef_mat[3, 3])
+          'p_val' = coef_mat[3, p_index],
+          'p_val_CYT' = coef_mat[4, p_index],
+          't_val' = rwNULL(coef_mat[3, t_index]))
         )
       } else {
         out <- c(out, list(
           'intercept' = coef_mat[1, 1],
-          'p_val_intercept' = coef_mat[1, 4],
+          'p_val_intercept' = coef_mat[1, p_index],
           'rc' = coef_mat[2, 1],
           'rc_CYT' = coef_mat[3, 1],
           ## Should be in range [-1, 0]
           'delta' = coef_mat[2, 1] / coef_mat[1, 1],
-          'p_val' = coef_mat[2, 4],
-          'p_val_CYT' = coef_mat[3, 4],
-          't_val' = coef_mat[2, 3])
+          'p_val' = coef_mat[2, p_index],
+          'p_val_CYT' = coef_mat[3, p_index],
+          't_val' = rwNULL(coef_mat[2, t_index]))
         )
       }
     } else {
@@ -893,22 +913,22 @@ fit_glm_ <- function(dtf, simple_output = FALSE,
         out <- c(out, list(
           'offset' = coef_mat[1, 1],
           'intercept' = coef_mat[2, 1],
-          'p_val_intercept' = coef_mat[2, 4],
+          'p_val_intercept' = coef_mat[2, p_index],
           'rc' = coef_mat[3, 1],
           ## Should be in range [-1, 0]
           'delta' = coef_mat[3, 1] / coef_mat[2, 1],
-          'p_val' = coef_mat[3, 4],
-          't_val' = coef_mat[3, 3])
+          'p_val' = coef_mat[3, p_index],
+          't_val' = rwNULL(coef_mat[3, t_index]))
         )
       } else {
         out <- c(out, list(
           'intercept' = coef_mat[1, 1],
-          'p_val_intercept' = coef_mat[1, 4],
+          'p_val_intercept' = coef_mat[1, p_index],
           'rc' = coef_mat[2, 1],
           ## Should be in range [-1, 0]
           'delta' = coef_mat[2, 1] / coef_mat[1, 1],
-          'p_val' = coef_mat[2, 4],
-          't_val' = coef_mat[2, 3])
+          'p_val' = coef_mat[2, p_index],
+          't_val' = rwNULL(coef_mat[2, t_index]))
         )
       }
     }
@@ -918,16 +938,16 @@ fit_glm_ <- function(dtf, simple_output = FALSE,
         out <- c(out, list(
           'offset' = coef_mat[1, 1],
           'intercept' = coef_mat[2, 1],
-          'p_val_intercept' = coef_mat[2, 4],
+          'p_val_intercept' = coef_mat[2, p_index],
           'rc_CYT' = coef_mat[3, 1],
-          'p_val_CYT' = coef_mat[3, 4]
+          'p_val_CYT' = coef_mat[3, p_index]
         ))
       } else {
         out <- c(out, list(
           'intercept' = coef_mat[1, 1],
-          'p_val_intercept' = coef_mat[1, 4],
+          'p_val_intercept' = coef_mat[1, p_index],
           'rc_CYT' = coef_mat[2, 1],
-          'p_val_CYT' = coef_mat[2, 4]
+          'p_val_CYT' = coef_mat[2, p_index]
         ))
       }
     } else {
@@ -935,22 +955,38 @@ fit_glm_ <- function(dtf, simple_output = FALSE,
         out <- c(out, list(
           'offset' = coef_mat[1, 1],
           'intercept' = coef_mat[2, 1],
-          'p_val_intercept' = coef_mat[2, 4]
+          'p_val_intercept' = coef_mat[2, p_index]
         ))
       } else {
         out <- c(out, list(
           'intercept' = coef_mat[1, 1],
-          'p_val_intercept' = coef_mat[1, 4]
+          'p_val_intercept' = coef_mat[1, p_index]
         ))
       }
     }
+  }
+
+  if (add_resid_ac) {
+    acf_res <- acf(residuals(fit), pl=FALSE, lag.max = 5)
+    for (idx in 1:5) {
+      ## Plus 1 to idx as the acf result is zero-indexed and the zero
+      ## index is always 1, i.e. uninformative
+      out[[glue::glue('resid_ac_{idx}')]] <- acf_res$acf[, , 1][idx+1]
+    }
+
+    dw_test <- car::durbinWatsonTest(fit, max.lag=1) %>%
+      as.list() %>%
+      { setNames(., paste0('dw_', names(.))) } %>%
+      { . }
+    out <- c(out, dw_test)
   }
 
   return(out)
 }
 
 
-fit_glm_log_ <- function(dtf, simple_output = FALSE, 
+fit_glm_log_ <- function(dtf, simple_output = FALSE,
+  add_resid_ac = FALSE,
   fit_offset = TRUE, fit_PS = TRUE, fit_CYT = FALSE) {
   if (maartenutils::null_dat(dtf)) return(NULL)
   if (is.null(dtf$c) || all(is.na(dtf$c))) return(NULL)
@@ -959,7 +995,8 @@ fit_glm_log_ <- function(dtf, simple_output = FALSE,
   dtf %>%
     dplyr::mutate(c = log10(c + 1)) %>%
     dplyr::mutate(i = log10(i + 1)) %>%
-    fit_glm_(fit_offset = fit_offset, fit_PS = fit_PS, 
+    fit_glm_(fit_offset = fit_offset, fit_PS = fit_PS,
+      add_resid_ac = add_resid_ac,
       fit_CYT = fit_CYT, simple_output = simple_output)
 }
 
@@ -1249,8 +1286,11 @@ gam_fit_model <- function(dtf) {
 glm_fit_model <- function(
   dtf,
   remove_low_TMB_patients = FALSE,
-  log_transform = F,
-  N_perms = 100) {
+  log_transform = FALSE,
+  use_lmPerm = TRUE,
+  include_perms = FALSE,
+  # N_perms = 1000) {
+  N_perms = N_perms_global) {
 
   if (null_dat(dtf)) return(NULL)
   dtf <- dtf[is.finite(y_var) & is.finite(ol)]
@@ -1269,73 +1309,150 @@ glm_fit_model <- function(
   }
 
   if (log_transform) {
-    fit <- fit_glm_log_(l_dtf)
+    fit <- fit_glm_log_(l_dtf, add_resid_ac = TRUE)
   } else {
-    fit <- fit_glm_(l_dtf)
+    fit <- fit_glm_(l_dtf, add_resid_ac = TRUE)
   }
 
   if (is.null(fit))
     return(tibble_row(message = 'glm_model_fit_failed'))
 
   if (!is.null(N_perms) && N_perms > 0) {
-    perm_res <- purrr::map_dfr(1:N_perms, function(n) {
-      ord <- sample(1:nrow(l_dtf))
-      p_dtf <- l_dtf[, .(ol = ol[ord], c, i)]
-      p_fit <- fit_glm_(p_dtf, simple_output = FALSE)
-      return(p_fit)
-    })
+    if (!use_lmPerm) {
+      perm_res <- purrr::map_dfr(1:N_perms, function(n) {
+        ord <- sample(1:nrow(l_dtf))
+        p_dtf <- l_dtf[, .(ol = ol[ord], c, i)]
+        p_fit <- fit_glm_(p_dtf, simple_output = FALSE)
+        return(p_fit)
+        })
 
-    if (F) {
-      browser()
-      p <- ggplot(perm_res, aes(x = 1, y = delta)) + 
-        geom_boxplot() +
-        coord_cartesian(
-          ylim = quantile(perm_res$delta, c(p_eps, 1-p_eps))
-        ) +
-        geom_hline(yintercept = fit$delta)
-      print_plot_eval(print(p),
-        width = 17.4, height = 10,
-        filename = file.path(IE_img_dir, 'test.pdf'))
+      num_cols <- map_lgl(perm_res, is.numeric) %>%
+        which %>% names %>% { . }
+
+      ## Compute stats over all numerical values of the permutation
+      ## distribution
+      perm_stats <-
+        perm_res %>%
+        dplyr::select(any_of(num_cols)) %>%
+        summarise(across(everything(),
+            c('median' = median, 'mad' = mad, 'mean' = mean),
+            na.rm = T)) %>%
+        { . }
+
+      # delta_mean_c_mean <-
+      #   fit$delta_mean - perm_stats[['delta_mean_mean']]
+      # perm_var <- 1/N_perms * sum(perm_res$delta_SE^2)
+      # ## SE of 'corrected' distribution is sum of original and
+      # ## permutation dist
+
+      for (cn in num_cols) {
+        acn <- glue('{cn}_pq')
+        perm_stats[[acn]] <-
+          mean(fit[[cn]] >= perm_res[[cn]])
+      }
+
+      perm_stats <- perm_stats %>%
+        set_names(paste('perm', names(.), sep = '_')) %>%
+        { . }
+    } else {
     }
-
-    num_cols <- map_lgl(perm_res, is.numeric) %>%
-      which %>% names %>% { . }
-
-    ## Compute stats over all numerical values of the permutation
-    ## distribution
-    perm_stats <-
-      perm_res %>%
-      dplyr::select(any_of(num_cols)) %>%
-      summarise(across(everything(),
-          c('median' = median, 'mad' = mad, 'mean' = mean),
-          na.rm = T)) %>%
-      { . }
-
-    # delta_mean_c_mean <-
-    #   fit$delta_mean - perm_stats[['delta_mean_mean']]
-    # perm_var <- 1/N_perms * sum(perm_res$delta_SE^2)
-    # ## SE of 'corrected' distribution is sum of original and
-    # ## permutation dist
-
-    for (cn in num_cols) {
-      acn <- glue('{cn}_pq')
-      perm_stats[[acn]] <-
-        mean(fit[[cn]] >= perm_res[[cn]])
-    }
-
-    perm_stats <- perm_stats %>%
-      set_names(paste('perm', names(.), sep = '_')) %>%
-      { . }
-
   } else {
     perm_stats <- list()
   }
 
-  res <- list(message = 'OK') %>%
+  out <-
+    list(message = 'OK') %>%
     c(fit) %>%
     c(perm_stats)
 
-  return(res)
+  if (include_perms) {
+    attr(out, 'perms') <- perm_res
+  }
+
+  return(out)
+}
+
+
+replace_values <- function(vec, reps) {
+  out <- vec
+  for (i in seq_along(reps)) {
+    idxs <- setdiff(which(vec == names(reps)[i]), NA)
+    out <- replace(out, idxs, unname(reps[i]))
+  }
+  return(out)
+}
+# replace_values(c('a', 'b', 'c', 'c'), c('c' = 'd', 'e' = 'f', 'g' = 'a'))
+# replace_values(c('f', 'b', 'c', 'c'), c('c' = 'd', 'e' = 'f', 'g' = 'a'))
+
+
+broom2row <- function(broom_out,
+  term_rename = c('(Intercept)' = 'offset', 'i' = 'intercept',
+    'i:ol' = 'rc', 'i:CYT' = 'CYT_rc', 'i:CYT:ol' = 'CYT_ps_rc')) {
+  broom_out$term <- replace_values(broom_out$term, term_rename)
+
+  out <- tidyr::pivot_wider(broom_out,
+    values_from = !term, names_from = term)
+  ## Make naming consistent with earlier work
+  colnames(out) <-
+    stringr::str_replace_all(colnames(out), '\\.', '_')
+  colnames(out) <-
+    stringr::str_replace_all(colnames(out), 'estimate_', '')
+  colnames(out) <-
+    stringr::str_replace_all(colnames(out), 'p_value', 'p_val')
+  colnames(out) <- replace_values(colnames(out),
+    c('p_val_rc' = 'p_val', 'df' = ''))
+
+  return(out)
+}
+
+
+lmp_fit_model <- function(
+  dtf,
+  remove_low_TMB_patients = FALSE,
+  log_transform = TRUE,
+  N_perms = N_perms_global) {
+
+  if (null_dat(dtf)) return(NULL)
+  dtf <- dtf[is.finite(y_var) & is.finite(ol)]
+  if (null_dat(dtf)) return(NULL)
+
+  if (remove_low_TMB_patients) {
+    l_dtf <- filter_low_TMB_patients(dtf)
+    nz_report <- attr(l_dtf, 'nz_report')
+    if (!test_data_sufficiency(l_dtf)) {
+      return(
+        tibble_row(message = 'data_insufficient_after_NZ_filtering'))
+    }
+  } else {
+    l_dtf <- dtf
+    nz_report <- list()
+  }
+
+  if (log_transform) {
+    dtf <- dtf %>%
+      dplyr::mutate(c = log10(c + 1)) %>%
+      dplyr::mutate(i = log10(i + 1)) %>%
+      { . }
+  }
+
+  fit_func <- pryr::partial(lmPerm::lmp, center = F, scale = F)
+
+  # fit_no_CYT <- tryCatch(fit_func(c~1+i+i:ol, data = dtf),
+  #   error = function(e) { NULL })
+
+  fit <- tryCatch(fit_func(c~1+i+i:ol+i:CYT, data = dtf),
+    error = function(e) { NULL })
+
+  if (is.null(fit))
+    return(tibble_row(message = 'model_fit_failed'))
+
+  out <-
+    list(message = 'OK') %>%
+    c(broom2row(tidy(fit)))
+
+  out$delta <- out$rc / out$intercept
+
+  return(out)
 }
 
 
@@ -1576,7 +1693,6 @@ wrapper_plot_repertoire_overlap_vs_yield_rate <- function(
 #'
 #'
 prep_cont_IE_analyses <- function() {
-browser()
   ## Determine donor_summary file to load in
   obj_fn <- gen_cont_IE_ds_fn(
     hla_allele = focus_allele,
