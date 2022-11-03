@@ -1,0 +1,252 @@
+VE-expression filteirng leads to negative delta but is also
+characterized by stringent neo-antigen filtering. Are these two
+phenomena linked?
+
+```{r }
+source(file.path(IE_root, 'continuous_IE_detection_init.R'))
+
+l_dtf <- p_setting_dtf[project_extended %in% c('Glioblastoma', 'Breast~LumA')]
+
+track_sum_stats_as_function_of_var(
+  # t_dat = p_setting_dtf,
+  t_dat = ,
+  track_var = 'RNA_expression',
+  response_vars = c('delta', 'perm_delta_pq'),
+  twoD_sens_analysis_only = F,
+  restrict_highest_level = F,
+  no_STS = F,
+  redo = T
+  # fn = file.path(IE_img_dir,
+  #     glue('controlled_setting_titration\\
+  #       focus_allele-all.pdf'))
+)
+```
+
+```{r }
+source(file.path(IE_root, 'continuous_IE_detection_init.R'))
+
+N_picks <- 11000
+
+if (T) {
+  set.seed(3)
+  picks <- f_setting_dtf[VE_threshold == 'VE=1'] %>%
+    # .[sample(1:nrow(.), 250)]
+    { . }
+  picks <- f_setting_dtf %>%
+    .[sample(1:nrow(.), min(N_picks, nrow(.)))]
+
+  t_dtf <- purrr::map_dfr(1:nrow(picks), function(ri) {
+    manipulated <- diagnose_regression(picks[ri])
+    return(manipulated)
+  })
+
+  ## Verify the intercept of the PS vs. TMB regression is always > 0
+  setDT(t_dtf)
+  t_dtf[, .N, .(sign(ol_vs_i_rc), sign(ol_vs_i_rc_n))]
+
+  saveRDS(t_dtf, file.path(rds_dir, 'diagnose_regression-VE=1.rds'))
+} else {
+  t_dtf <- readRDS(file.path(rds_dir, 'diagnose_regression-VE=1.rds'))
+}
+
+t_dtf <- t_dtf[sign(ol_vs_i_rc_n) == sign(ol_vs_i_rc)]
+summary(t_dtf$cooksd_evenness)
+t_dtf$cook_b <- cut(t_dtf$cooksd_evenness, breaks = seq(0, 1, by = .1))
+t_dtf$yr_b <- cut(t_dtf$baseline_NAYR, breaks = seq(0, 1, by = .005))
+t_dtf$yr_b <- cut(t_dtf$baseline_NAYR, breaks = seq(0, 1, by = .0025))
+# t_dtf$ol_vs_i_rc_n
+```
+
+Sub-analyses for which the mutational burden is strongly associated
+with the presentation score should have biased deltas.
+
+```{r }
+
+setDT(t_dtf)
+tally <-
+  t_dtf[, .N, keyby = .(delta = delta > 0, ps = ol_vs_i_rc_n > 0)][,
+  .(delta, ps, N, frac = N / sum(N))]
+tally[delta == FALSE] %>%
+  .[, .(delta, ps, N, frac = N / sum(N))]
+tally[delta == TRUE] %>%
+  .[, .(delta, ps, N, frac = N / sum(N))]
+# t_dtf[cook_b == '(0.8,0.9]' & yr_b == '(0.03,0.04]']
+
+if (F) {
+  ## For which panels is there a significant relationship?
+  lm_res <-
+    t_dtf[, {
+      fit = lm(delta ~ ol_vs_i_rc_n, data = .SD)
+      broom::tidy(fit)
+    }, keyby = .(cook_b, yr_b)]
+} else {
+  ## For which panels is there a significant relationship?
+  lm_res <-
+    t_dtf[, {
+      fit = lm(delta ~ ol_vs_i_rc_n, data = .SD)
+      c(broom::tidy(fit), list(N = .N))
+    }, keyby = .(yr_b)]
+}
+
+c_id_vars <- intersect(colnames(lm_res), c('cook_b', 'yr_b'))
+sizeable <- unique(lm_res[N >= 100][, c_id_vars, with = F])
+sig_lm <- lm_res[term == 'ol_vs_i_rc_n' & p.value <= 0.1]
+sig_lm <- lm_res
+setkeyv(sig_lm, c_id_vars)
+setkeyv(lm_res, c_id_vars)
+setkeyv(t_dtf, c_id_vars)
+setkeyv(sizeable, c_id_vars)
+
+line_dat <-
+  lm_res[sig_lm[sizeable, nomatch = 0]] %>%
+  .[, c(c_id_vars, 'estimate', 'term', 'p.value'), with = F] %>%
+  # .[, c(c_id_vars, 'estimate', 'term'), with = F] %>%
+  unique() %>%
+  pivot_wider(
+    id_cols = all_of(c_id_vars),
+    names_from = 'term',
+    values_from = c(estimate, p.value)
+  ) %>%
+  dplyr::rename_with(.fn = ~gsub('\\(Intercept\\)', 'intercept', .x)) %>%
+  dplyr::rename_with(.fn = ~gsub('estimate_', '', .x)) %>%
+  dplyr::rename_with(.fn = ~gsub('p\\.value', 'p_value', .x)) %>%
+  dplyr::rename_with(.fn = ~gsub('ol_vs_i_rc_n', 'rc', .x)) %>%
+  { . }
+
+if (F) {
+  t_dtf[unique(sizeable[, c_id_vars, with = F])] %>%
+    .[ol_vs_i_rc_n >= 3, .N]
+  t_dtf[unique(sizeable[, c_id_vars, with = F]), .N]
+  69/7834
+}
+
+p <-
+  t_dtf[unique(sizeable[, c_id_vars, with = F])] %>%
+  .[ol_vs_i_rc_n < 3] %>%
+  # t_dtf[sizeable, nomatch = 0] %>%
+  # dplyr::filter(type != 'conservative') %>%
+  ggplot(aes(y = delta,
+      # x = ol_vs_i_rc_n,
+      # x = log2(ol_vs_i_rc_n),
+      x = ol_vs_i_rc_n,
+      # color = mean_yr)) +
+      color = NULL)) +
+  geom_hline(yintercept = 0) +
+  geom_vline(xintercept = 0) +
+  # geom_smooth(method = 'lm') +
+  geom_abline(data = line_dat, mapping = aes(intercept = intercept,
+      slope = rc), color = 'indianred3') +
+  ggpp::geom_text_npc(data = line_dat,
+    mapping = aes(npcx = .95, npcy = .05,
+      label = fancy_p(p_value_rc)),
+    size = 2, parse = TRUE) +
+  # scale_x_continuous(trans = 'sqrt') +
+  # xlab('Fold difference in TMB at h = 1 vs. h = 0') +
+  xlab(parse(text = 'TMB~delta')) +
+  ylab(parse(text = 'NAYR~delta')) +
+  # facet_grid(yr_b ~ cook_b,
+  #   labeller = label_both) +
+  facet_grid(~ yr_b,
+    labeller = labeller(
+        cook_b = map_chr(auto_name(levels(t_dtf$cook_b)),
+          ~glue('Cook\'s D evenness in\n{.x}')),
+        yr_b = map_chr(auto_name(levels(t_dtf$yr_b)),
+          ~glue('Mean NAYR in\n{.x}'))
+    # ), scales = 'free_x') +
+    )) +
+  # facet_grid(yr_b ~ cook_b,
+  #   labeller = labeller(
+  #       cook_b = map_chr(auto_name(levels(t_dtf$cook_b)),
+  #         ~glue('Cook\'s D evenness in\n{.x}')),
+  #       yr_b = map_chr(auto_name(levels(t_dtf$yr_b)),
+  #         ~glue('Mean NAYR in\n{.x}'))
+  #   )) +
+  # facet_grid( ~ cook_b, scales = 'free_x') +
+  geom_point(alpha = .05, size = .1) +
+  scale_colour_viridis_c() +
+  theme(legend.position = 'right')
+print_plot_eval(print(p),
+  width = 17.4, height = 5,
+  filename = file.path(IE_img_dir, 'ps_dist_influences_delta.pdf'))
+```
+
+Show a few archetypes
+
+```{r }
+source(file.path(IE_root, 'continuous_IE_detection_init.R'))
+
+t_dtf_i <-
+  t_dtf %>%
+  # .[unique(sizeable[, c_id_vars, with = F])] %>%
+  .[ol_vs_i_rc_n < 3]
+
+N_plots = 2
+
+plots <-
+  tidyr::expand_grid(
+    # cook_b = levels(t_dtf$cook_b),
+    yr_b = t_dtf_i[, sort(unique(yr_b))][1:3],
+  ) %>%
+  pmap(function(yr_b_l) {
+    set.seed(34)
+
+    picks <- t_dtf_i[yr_b == yr_b_l]
+    N_picks <- min(N_plots, nrow(picks))
+    picks <- picks[sample(1:nrow(picks), N_picks)]
+
+    ## t_dtf Doesn't contain required meta data, so retrieve it by
+    ## merging to f_settings based on the results
+    shared_cols <- intersect(colnames(t_dtf), colnames(f_setting_dtf))
+    setkeyv(f_setting_dtf, shared_cols)
+    setkeyv(picks, shared_cols)
+    picks <- f_setting_dtf[picks, nomatch = 0]
+    stopifnot(nrow(picks) == N_picks)
+
+    map(1:nrow(picks), function(ri) {
+      pick <- picks[ri, ]
+      
+      tab <- pick2print(pick)
+      if (F) {
+        tab <- as.data.frame(tab)
+        idx <- which(tab$setting == 'Tumor type')
+        # val <- tab[idx, value]
+        tab[idx, "value"] <- parse(text = tab[idx, "value"])
+        parse(text = gsub(' ', '~', tab$value))
+      }
+
+      p0 <-
+        gridExtra::tableGrob(
+          tab, 
+          rows = NULL,
+          theme = gridExtra::ttheme_default(
+            padding = unit(c(2, 2), 'mm'),
+            base_size = 6
+          )
+        ) %>%
+        wrap_plots()
+
+      p1 <- plot_ps_vs_tmb(pick) + xlab('')
+      p2 <- plot_subanalysis_yr_vs_ps(pick)
+      # p3 <- plot_subanalysis(pick)
+
+      out <- (p0 / p1 / p2) + 
+        plot_layout(heights = c(7, 3, 3))
+
+      if (F) {
+        print_plot_eval(print(out),
+          width = 17.4, height = 10,
+          filename = file.path(IE_img_dir, 'test.pdf'))
+      }
+
+      library(patchwork)
+      return(out)
+    })
+  }) %>%
+  unlist(recursive = F)
+
+multi_page_patchwork(
+  plots = plots,
+  ncol = 2, nrow = 2,
+  filename = file.path(IE_img_dir, 'PS_dist_NAYR_examples.pdf')
+)
+```

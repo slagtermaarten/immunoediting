@@ -196,6 +196,7 @@ ca_titles = c(
   et = 'Gene expression threshold (TPM)',
   STS = 'Similarity to self filter',
   PR = 'Affinity rank percentile threshold',
+  'RNA_expression' = 'RNA-expression filtering',
   VE = 'Variant coverage threshold')
 ra_titles = c(
   regression_var = 'Response variable',
@@ -217,6 +218,7 @@ replace_name <- function(v, old, new) {
 }
 var_titles <- c(ca_titles, ra_titles_short) %>%
   c('project_extended' = 'Tumor type') %>%
+  c('tumor_type' = 'Tumor type') %>%
   c('focus_allele' = 'IE focus allele') %>%
   replace_name('et', 'expression_threshold') %>%
   replace_name('VE', 'VE_threshold') %>%

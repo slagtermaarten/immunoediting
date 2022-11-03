@@ -6,7 +6,9 @@ IE_requires_computation <- mod_time_comparator(
   # minimum_mod_time = '2022-9-13 11:51', verbose = TRUE)
   # minimum_mod_time = '2022-9-14 11:51', verbose = TRUE)
   # minimum_mod_time = '2022-9-21 14:31', verbose = TRUE)
-  minimum_mod_time = '2022-10-03 14:31', verbose = TRUE)
+  # minimum_mod_time = '2022-10-03 14:31', verbose = TRUE)
+  # minimum_mod_time = '2022-10-23 14:31', verbose = TRUE)
+  minimum_mod_time = '2022-11-03 14:31', verbose = TRUE)
 # 2022-10-04 16:00 Implemented ACF stuff, but didn't bother to reset
 # timer while only a subset of analyses has run last night as I
 # probably won't need the ACF stuff and will focus on permutatation
@@ -806,17 +808,22 @@ fit_rlm_ <- function(dtf, simple_output = F, include_AFDP = F,
 
 
 fit_glm_ <- function(dtf, simple_output = FALSE,
-  fit_PS = TRUE, fit_offset = FALSE,
-  add_resid_ac = FALSE, fit_CYT = F) {
+  fit_PS = TRUE, 
+  fit_offset = TRUE,
+  fit_CYT = F, 
+  add_resid_ac = FALSE, 
+  diagnose = FALSE,
+  do_test_data_sufficiency = TRUE) {
 
   dtf <- setDT(dtf)[is.finite(i) & is.finite(c) & is.finite(ol)]
-  if (!test_data_sufficiency(dtf)) return(NULL)
+  if (do_test_data_sufficiency && !test_data_sufficiency(dtf)) 
+    return(NULL)
 
-  if (method == 'glm') {
-    fit_func <- stats::glm
-  } else {
-    fit_func <- pryr::partial(lmPerm::lmp, scale = F)
-  }
+  # if (method == 'glm') {
+  # } else {
+  #   fit_func <- pryr::partial(lmPerm::lmp, scale = F)
+  # }
+  fit_func <- stats::glm
 
   if (fit_PS) {
     if (fit_CYT) {
@@ -981,13 +988,39 @@ fit_glm_ <- function(dtf, simple_output = FALSE,
     out <- c(out, dw_test)
   }
 
+  out$baseline_yr <- coef(fit)[['(Intercept)']] + 
+        mean(fit$data$i) * coef(fit)[['i']]
+
+  if (diagnose) {
+    leverage <- hatvalues(fit)
+    cooksd <- cooks.distance(fit)
+    out$leverage_evenness <- maartenutils::compute_evenness(abs(leverage))
+    out$cooksd_evenness <- maartenutils::compute_evenness(abs(cooksd))
+
+    ps_fit <- lm(i ~ ol, data = dtf, weights = leverage)
+    # if (coef(ps_fit)['(Intercept)'] < 0) browser()
+    out$ol_vs_i_rc <- coef(ps_fit)['ol']
+    out$ol_vs_i_rc_n <- coef(ps_fit)['ol'] / coef(ps_fit)['(Intercept)']
+  }
+
+  out$median_TMB <- median(fit$data$i)
+  if (fit_offset) {
+    out$baseline_NAYR <- coef(fit)[['(Intercept)']] / out$median_TMB + 
+      coef(fit)[['i']]
+    if (fit_PS) {
+      out$slope_NAYR <- 1/out$median_TMB * coef(fit)[['i:ol']]
+    }
+  }
+
   return(out)
 }
 
 
 fit_glm_log_ <- function(dtf, simple_output = FALSE,
   add_resid_ac = FALSE,
-  fit_offset = TRUE, fit_PS = TRUE, fit_CYT = FALSE) {
+  fit_offset = TRUE, fit_PS = TRUE, fit_CYT = FALSE,
+  do_test_data_sufficiency = TRUE) {
+
   if (maartenutils::null_dat(dtf)) return(NULL)
   if (is.null(dtf$c) || all(is.na(dtf$c))) return(NULL)
   if (is.null(dtf$i) || all(is.na(dtf$i))) return(NULL)
@@ -997,7 +1030,9 @@ fit_glm_log_ <- function(dtf, simple_output = FALSE,
     dplyr::mutate(i = log10(i + 1)) %>%
     fit_glm_(fit_offset = fit_offset, fit_PS = fit_PS,
       add_resid_ac = add_resid_ac,
-      fit_CYT = fit_CYT, simple_output = simple_output)
+      fit_CYT = fit_CYT, 
+      do_test_data_sufficiency = do_test_data_sufficiency,
+      simple_output = simple_output)
 }
 
 
@@ -1287,7 +1322,7 @@ glm_fit_model <- function(
   dtf,
   remove_low_TMB_patients = FALSE,
   log_transform = FALSE,
-  use_lmPerm = TRUE,
+  use_lmPerm = FALSE,
   include_perms = FALSE,
   # N_perms = 1000) {
   N_perms = N_perms_global) {
@@ -1324,7 +1359,7 @@ glm_fit_model <- function(
         p_dtf <- l_dtf[, .(ol = ol[ord], c, i)]
         p_fit <- fit_glm_(p_dtf, simple_output = FALSE)
         return(p_fit)
-        })
+      })
 
       num_cols <- map_lgl(perm_res, is.numeric) %>%
         which %>% names %>% { . }
@@ -1345,6 +1380,15 @@ glm_fit_model <- function(
       # ## SE of 'corrected' distribution is sum of original and
       # ## permutation dist
 
+      ## Compute what fraction of the permutations are more extreme in
+      ## absolute sense. Do f(x) 1-x on this to get permutation
+      ## p-values
+      for (cn in num_cols) {
+        acn <- glue('{cn}_apq')
+        perm_stats[[acn]] <-
+          mean(abs(fit[[cn]]) >= abs(perm_res[[cn]]))
+      }
+
       for (cn in num_cols) {
         acn <- glue('{cn}_pq')
         perm_stats[[acn]] <-
@@ -1359,6 +1403,7 @@ glm_fit_model <- function(
   } else {
     perm_stats <- list()
   }
+
 
   out <-
     list(message = 'OK') %>%
@@ -1963,6 +2008,150 @@ prep_continuous_param_grid <- function(
 }
 
 
+test_opt_string_consistency <- function(dtf) {
+  setDT(dtf)
+  if (!'opt_string' %in% colnames(dtf)) {
+    # message('Skipping STS-opt string consistency check')
+    return(NULL)
+  }
+  if (any(c('TRUE', 'FALSE') %in% dtf$sts_filtering)) {
+    stopifnot(dtf[sts_filtering == TRUE, 
+      all(grepl('STS', opt_string))]) 
+    stopifnot(dtf[sts_filtering == FALSE, 
+      !all(grepl('STS', opt_string))])
+  } else {
+    stopifnot(dtf[sts_filtering == 'STS',
+      all(grepl('STS', opt_string))]) 
+    stopifnot(dtf[sts_filtering == 'no STS', 
+      !all(grepl('STS', opt_string))])
+  }
+  return(TRUE)
+}
+
+
+prettify_focus_allele <- function(dtf) {
+  setDT(dtf)
+  if ('focus_allele' %in% colnames(dtf)) {
+    if (!is.factor(dtf$focus_allele)) {
+      dtf$focus_allele <- factor(dtf$focus_allele)
+    }
+    if (!any(grepl('\\*', levels(dtf$focus_allele)))) {
+      new_levs <- levels(dtf$focus_allele) %>%
+          { setNames(., ppHLA(.)) }
+      dtf[, focus_allele :=
+        forcats::fct_recode(focus_allele, !!!new_levs)]
+      test_opt_string_consistency(dtf)
+      # levels(dtf$focus_allele)
+    }
+  }
+  return(dtf)
+}
+
+
+prettify_APR <- function(dtf) {
+  setDT(dtf)
+  if ('percentile_rank' %in% colnames(dtf)) {
+    if (!is.factor(dtf$percentile_rank)) {
+      dtf$percentile_rank <- factor(dtf$percentile_rank)
+    }
+    if (!any(grepl('APR', levels(dtf$percentile_rank)))) {
+      perc_rank_print <- purrr::map_chr(
+        auto_name(levels(dtf$percentile_rank)),
+        ~glue::glue('APR={.x}')) %>%
+        { setNames(names(.), .) }
+      dtf[, percentile_rank :=
+        forcats::fct_recode(percentile_rank, !!!perc_rank_print)]
+    }
+  }
+  test_opt_string_consistency(dtf)
+  return(dtf)
+}
+
+
+prettify_STS <- function(dtf) {
+  setDT(dtf)
+  if ('sts_filtering' %in% colnames(dtf)) {
+    if (!is.factor(dtf$sts_filtering)) {
+      dtf$sts_filtering <- factor(dtf$sts_filtering)
+    }
+    if (!any(grepl('STS', levels(dtf$sts_filtering)))) {
+      new_levs <- c('STS' = 'TRUE', 'no STS' = 'FALSE')
+      dtf[, sts_filtering_n :=
+        forcats::fct_recode(sts_filtering, !!!new_levs)]
+      dtf[, .N, keyby = .(sts_filtering, sts_filtering_n)]
+      dtf[, sts_filtering := sts_filtering_n]
+      dtf[, sts_filtering_n := NULL]
+    }
+  }
+  test_opt_string_consistency(dtf)
+  return(dtf)
+}
+
+
+prettify_LOHHLA <- function(dtf) {
+  setDT(dtf)
+  if ('LOH_HLA' %in% colnames(dtf)) {
+    if (!is.factor(dtf$LOH_HLA)) {
+      dtf$LOH_HLA <- factor(dtf$LOH_HLA)
+    }
+    if (any(grepl('no_', levels(dtf$LOH_HLA)))) {
+      new_levs <- c(
+        'no LOH HLA' = 'no_LOHHLA', 
+        'LOHHLA' = 'LOH HLA',
+        'strict LOH HLA' = 'strict_LOHHLA'
+      )
+      dtf[, LOH_HLA :=
+        forcats::fct_recode(LOH_HLA, !!!new_levs)]
+    }
+  }
+  test_opt_string_consistency(dtf)
+  return(dtf)
+}
+
+
+prettify_overlap_var <- function(dtf) {
+  setDT(dtf)
+  if ('overlap_var' %in% colnames(dtf)) {
+    if (!is.factor(dtf$overlap_var)) {
+      dtf$overlap_var <- factor(dtf$overlap_var)
+    }
+    if (any(grepl('_', levels(dtf$overlap_var)))) {
+      new_levs <- c(
+        'HLA A, B, C' = 'mean_score', 
+        'HLA A, B' = 'mean_score_AB'
+      )
+      dtf[, overlap_var :=
+        forcats::fct_recode(overlap_var, !!!new_levs)]
+    }
+  }
+  test_opt_string_consistency(dtf)
+  return(dtf)
+}
+
+
+prettify_variant_selection <- function(dtf) {
+  setDT(dtf)
+
+  # levels(f_setting_dtf$analysis_name)
+
+  if ('analysis_name' %in% colnames(dtf)) {
+    if (!is.factor(dtf$analysis_name)) {
+      dtf$analysis_name <- factor(dtf$analysis_name)
+    }
+    if (any(grepl('_', levels(dtf$analysis_name)))) {
+      new_levs <- 
+        with(display_settings$analysis_name, setNames(breaks, labels))
+      dtf[, analysis_name :=
+        forcats::fct_recode(analysis_name, !!!new_levs)]
+      # levels(dtf$analysis_name)
+    }
+  }
+  test_opt_string_consistency(dtf)
+
+  return(dtf)
+}
+
+
 format_overview_res <- function(
   dtf,
   reg_method = NULL,
@@ -2026,8 +2215,14 @@ format_overview_res <- function(
     dtf <- dtf[!is.na(perm_delta_pq)]
   }
 
-  if (all(c('delta', 'perm_delta_median') %in% colnames(dtf))) {
-    dtf[, 'delta_n' := delta - perm_delta_median]
+  if (T) {
+    if (all(c('delta', 'perm_delta_median') %in% colnames(dtf))) {
+      dtf[, 'delta_n' := delta - perm_delta_median]
+    }
+  } else {
+    if (all(c('delta', 'perm_delta_mean') %in% colnames(dtf))) {
+      dtf[, 'delta_n' := delta - perm_delta_mean]
+    }
   }
 
   stopifnot('analysis_idx' %in% colnames(dtf))
@@ -2038,16 +2233,6 @@ format_overview_res <- function(
   dtf$percentile_rank %<>% friendly_factor
   dtf$processing_threshold %<>% friendly_factor
 
-  if ('percentile_rank' %in% colnames(dtf) &&
-    !any(grepl('APR', levels(dtf$percentile_rank)))) {
-    perc_rank_print <- purrr::map_chr(
-      auto_name(levels(dtf$percentile_rank)),
-      ~glue::glue('APR={.x}')) %>%
-      { setNames(names(.), .) }
-    dtf[, percentile_rank :=
-      forcats::fct_recode(percentile_rank, !!!perc_rank_print)]
-  }
-
   if ('delta_n' %in% colnames(dtf)) {
     l_id_vars <- setdiff(id_vars, c('tumor_type', 'focus_allele'))
     dtf[, 'delta_n_cov' := sd(delta_n) / abs(mean(delta_n)),
@@ -2057,6 +2242,18 @@ format_overview_res <- function(
   dtf <- format_coef_overview_(dtf)
   dtf <- recode_RNA_expression(dtf)
 
+
+  return(dtf)
+}
+
+
+pretty_overview_dtf <- function(dtf) {
+  dtf <- prettify_focus_allele(dtf)
+  dtf <- prettify_APR(dtf)
+  dtf <- prettify_STS(dtf)
+  dtf <- prettify_variant_selection(dtf)
+  dtf <- prettify_LOHHLA(dtf)
+  dtf <- prettify_overlap_var(dtf)
   return(dtf)
 }
 
@@ -2278,8 +2475,8 @@ cat_padded_msg <- function(msg, width = 60) {
 }
 
 
-print_overview_stats <- function(dtf, stage_id = '',
-  plot_fishtails = NULL) {
+print_overview_stats <- function(dtf, 
+  plot_fishtails = NULL, stage_id = '') {
   bayesian_analysis <-
     all(c('evid_ratio', 'intercept_estimate') %in% colnames(dtf))
 
@@ -2483,7 +2680,7 @@ prep_pan_IE_heatmap <- function(
     z_normalize = z_normalize,
   ) %>% setDT()
   dtf <- dtf[analysis_idx %in% analysis_idxs]
-  print_overview_stats(dtf, 'before any filtering')
+  print_overview_stats(dtf, stage_id = 'before any filtering')
 
   ## As this is an 'analysis' object, a subset of rows will be
   ## specifically for the pan-can setting. For 'data' objects, all
@@ -2504,7 +2701,7 @@ prep_pan_IE_heatmap <- function(
     dtf <- dtf[focus_allele == hla_allele]
   }
 
-  print_overview_stats(dtf, 'after analysis type-filtering')
+  print_overview_stats(dtf, stage_id = 'after analysis type-filtering')
 
   if (!grepl('bayesian', reg_method)) {
     if (filter_intercept == 'positive') {
@@ -2525,7 +2722,7 @@ prep_pan_IE_heatmap <- function(
       ## analysis
       dtf <- pick_representative_allele(dtf, sort_var = sort_var,
         method = pick_allele_method)
-      print_overview_stats(dtf, 'after picking representative allele')
+      print_overview_stats(dtf, stage_id = 'after picking representative allele')
     }
     p_var_name <- determine_p_var(fill_var)
     adj_p_var_name <- sprintf('%s.adj', p_var_name)
@@ -2616,14 +2813,16 @@ filter_bayesian_coef_overview <- function(
     dtf <- dtf[-log2_rc_error >= rc_filter_error]
     print_overview_stats(dtf,
       plot_fishtails = plot_fishtails,
-      stage_id = 'After filtering for rc error')
+      stage_id = 'After filtering for rc error'
+    )
   }
 
   if (!is.null(delta_filter_error)) {
     dtf <- dtf[-log2_est_error >= delta_filter_error]
     print_overview_stats(dtf,
       plot_fishtails = plot_fishtails,
-      stage_id = 'After filtering for delta error')
+      stage_id = 'After filtering for delta error'
+    )
   }
 
   if (!single_hla_mode && pick_allele_method == 'est_error') {
@@ -2632,7 +2831,8 @@ filter_bayesian_coef_overview <- function(
     dtf <- s_dtf
     print_overview_stats(dtf,
       plot_fishtails = plot_fishtails,
-      stage_id = 'After picking representative alleles')
+      stage_id = 'After picking representative alleles'
+    )
   }
 
   if ('intercept' %in% colnames(dtf) &&
@@ -2640,7 +2840,8 @@ filter_bayesian_coef_overview <- function(
     dtf <- dtf[intercept >= 0]
     print_overview_stats(dtf,
       plot_fishtails = plot_fishtails,
-      stage_id = 'After removing negative intercept sub-analyses')
+      stage_id = 'After removing negative intercept sub-analyses'
+    )
   }
   return(dtf)
 }
@@ -2859,4 +3060,13 @@ cont_IE_fn_to_args <- function(
   args$z_normalize <- args$z_normalize == 'not_z_normalized'
   args$analysis_idx <- as.integer(args$analysis_idx)
   return(args)
+}
+
+
+drop_high_VE <- function(dtf) {
+  setDT(dtf)
+  dtf <- dtf[VE_threshold != 'VE=5']
+  dtf <- dtf[VE_threshold != '5']
+  dtf[, VE_threshold := droplevels(VE_threshold)]
+  return(dtf)
 }

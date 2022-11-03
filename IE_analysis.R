@@ -3,7 +3,7 @@ theme_set(
     legend.box.background = element_blank(),
     legend.key.width = unit(5, 'mm'),
     panel.spacing = unit(.4, 'lines'),
-    # base_size = font_size,
+    base_size = 6,
     legend.direction = 'vertical',
     legend.position = c(.95, .95),
     legend.justification = c(1, 1),
@@ -21,7 +21,7 @@ CV_IE_settings <- c('focus_allele',
   'RNA_expression',
   'analysis_name')
 
-IE_settings_pal <- 
+IE_settings_pal <-
   gen_color_vector(arg = CV_IE_settings, name = 'FantasticFox1')
 
 tts <- names(tumor_types) %>% { .[!grepl('Cutaneous', .)] }
@@ -65,8 +65,8 @@ stopifnot(sub_repetitions(c('a', 'a', 'a', 'b', 'b')) ==
 
 display_settings <- list(
   analysis_name = list(
-    breaks = analysis_names[c(1, 3, 4, 5)],
-    labels = c('All variants', 'Clonal',
+    breaks = analysis_names[c(1, 2, 3, 4, 5)],
+    labels = c('All variants', 'Rooney O/E', 'Clonal',
                'No drivers/essentials', 'Marty oncogenic')),
   LOH_HLA = list(
     breaks = c('no_LOHHLA', 'LOHHLA', 'strict_LOHHLA'),
@@ -136,16 +136,17 @@ IE_labels <- list(
 #' Take a row from the output created by prep_pan_IE_heatmap and
 #' convert it to be arguments to be backfed to to test_continuous_IE
 #'
-pan_IE_res_to_call_args <- function(res_oi) {
+pan_IE_res_to_call_args <- function(pick) {
   ## Complement with all other required arguments to
   ## test_continuous_IE
-  out <- as.list(res_oi) %>%
+  out <- as.list(pick) %>%
     { .[intersect(names(.), names(formals(test_continuous_IE)))] } %>%
     c(list('include_call' = T, 'redo' = F)) %>%
     map(~if (class(.x) == 'factor') as.character(.x) else .x)
 
-  if (is.na(out$patient_inclusion_crit))
+  if (is.na(out$patient_inclusion_crit)) {
     out$patient_inclusion_crit <- 'FDR1'
+  }
 
   return(out)
 }
@@ -515,7 +516,7 @@ summarize_pan_IE_heatmap <- function(dtf) {
 #'
 #'
 plot_bayesian_error_vs_effect <- function(
-  dtf, 
+  dtf,
   x_var = '-log2_rc_error',
   return_mode = 'patchwork',
   grouping = NULL) {
@@ -771,6 +772,8 @@ format_coefs <- format_formatted_coefs <- function(dtf) {
 
   out$coef[out$coef_type == 'Focus HLA allele'] %<>%
     quickMHC::ppHLA()
+  out$coef[out$coef_type == 'IE focus allele'] %<>%
+    quickMHC::ppHLA()
   out$coef[out$coef == 'sts_filteringTRUE'] <- 'STS'
   out$coef[out$coef == 'rooney'] <-
     'Observed/expected (Rooney et al.)'
@@ -779,11 +782,20 @@ format_coefs <- format_formatted_coefs <- function(dtf) {
   out$coef[out$coef == 'driv_ess'] <-
     'No drivers/essential passengers'
   out$coef[out$coef == 'clon'] <- 'Clonal mutations only'
+  out$coef[out$coef == 'twoD_sens_analysis'] <- 'All SNVs'
   out$coef[out$coef == 'strict_LOHHLA'] <-
     'Fully assessable patients only'
   out$coef[out$coef == 'LOHHLA'] <- 'LOH HLA for assessable alleles'
+  out$coef[out$coef == 'none'] <- 'None'
   out$coef[out$coef == 'FDR10'] <- 'Stringent'
   out$coef[out$coef == 'FDR1'] <- 'Lenient'
+  out$coef[out$coef == 'mean_score_AB'] <- 'A, B alleles'
+  out$coef[out$coef == 'mean_score'] <- 'A, B, C alleles'
+  out$coef <- gsub('lumb', 'LumB', out$coef)
+  out$coef <- gsub('luma', 'LumA', out$coef)
+  out$coef <- gsub('min', '-', out$coef)
+  out$coef <- gsub('plus', '+', out$coef)
+  out$coef <- gsub('an cancer', 'an-cancer', out$coef)
   out$label <- paste(out$coef_type, '-', out$coef)
   out$label[out$label == 'Intercept - Intercept'] <- 'Intercept'
   return(out)
@@ -1999,7 +2011,19 @@ id_vars <- c('overlap_var',
 #'
 subset_subanalysis_groups <- function(t_dat, id_vars,
   filter_mode = 'max') {
-  worthwhile_settings <- t_dat[, .N, by = id_vars]
+  setDT(t_dat)
+  worthwhile_settings <- t_dat[, .N, keyby = id_vars]
+
+  if (F) {
+    setkeyv(t_dat, id_vars)
+    ass <- t_dat[worthwhile_settings[4], ]
+    table(t_dat$sts_filtering)
+    ass[, .(analysis_idx, sts_filtering, opt_string)]
+    setting_dtf[, .(analysis_idx, percentile_rank, focus_allele, sts_filtering, opt_string)]
+    f_setting_dtf[, .(analysis_idx, percentile_rank, focus_allele, sts_filtering, opt_string)]
+    p_setting_dtf[, .(analysis_idx, percentile_rank, focus_allele, sts_filtering, opt_string)]
+  }
+
   # worthwhile_settings <- worthwhile_settings[N > 1]
   if (filter_mode == 'max') {
     worthwhile_settings <-
@@ -2008,7 +2032,7 @@ subset_subanalysis_groups <- function(t_dat, id_vars,
   invisible(worthwhile_settings[, 'group_id' := 1:.N])
   setkeyv(t_dat, id_vars)
   t_dat <- t_dat[worthwhile_settings]
-  t_dat$N <- NULL
+  # t_dat$N <- NULL
 
   # t_dat[, .N, by = id_vars][, table(N)]
   # t_dat
@@ -2033,7 +2057,10 @@ filter_NN_subs <- function(
   identify_outliers_by = NULL,
   twoD_sens_analysis_only = T,
   restrict_highest_level = T,
-  no_STS = T) {
+  no_STS = T,
+  verbose = FALSE) {
+
+  stopifnot(length(track_var) == 1)
 
   if (all(c('delta_mean', 'perm_delta_mean_mean') %in%
       colnames(t_dat))) {
@@ -2051,16 +2078,30 @@ filter_NN_subs <- function(
     t_dat <- t_dat[sts_filtering == F]
   }
 
+  # table(t_dat$RNA_expression)
   if (track_var == 'VE_threshold') {
     t_dat <- t_dat[expression_threshold == 'none']
   } else if (track_var == 'expression_threshold') {
     t_dat <- t_dat[VE_threshold == 'none']
   }
 
-  l_id_vars <- setdiff(id_vars, track_var) %>%
-    intersect(colnames(t_dat))
-  t_dat <- subset_subanalysis_groups(t_dat = t_dat,
-    id_vars = l_id_vars)
+  l_id_vars <-
+    c(id_vars, 'project_extended', 'RNA_expression') %>%
+    setdiff(c('VE_threshold', 'expression_threshold')) %>%
+    intersect(colnames(t_dat)) %>%
+    setdiff(track_var) %>%
+    unique()
+  # setdiff(id_vars, l_id_vars)
+  setdiff(colnames(t_dat), l_id_vars)
+  head(colnames(t_dat))
+  t_dat_f <-
+    subset_subanalysis_groups(t_dat = t_dat, id_vars = l_id_vars)
+  # t_dat_f[, .N, .(group_id)][, table(N)]
+  table(t_dat_f$group_id)
+  t_dat_f[, .(group_id, analysis_idx)]
+  head(t_dat_f, 2)
+
+  t_dat <- t_dat_f
 
   if (F) {
     t_dat <-
@@ -2108,7 +2149,6 @@ filter_NN_subs <- function(
         variable.name = 'var'))
   }, by = c('group_id', l_id_vars)]
 
-
   pe_levs <- levels(t_dat$project_extended)
   t_dat <- t_dat %>%
     dplyr::mutate(
@@ -2127,8 +2167,10 @@ filter_NN_subs <- function(
   allowed_tumor_types <-
     t_dat[, uniqueN(group_id), by = project_extended] %>%
     .[V1 > 100, as.character(project_extended)]
-  t_dat[, uniqueN(group_id), project_extended]
   t_dat <- t_dat[project_extended %in% allowed_tumor_types]
+  if (verbose) {
+    print(t_dat[, uniqueN(group_id), project_extended])
+  }
   if (null_dat(t_dat)) return(NULL)
 
   if (restrict_highest_level) {
@@ -2164,6 +2206,7 @@ track_sum_stats_as_function_of_var <- function(
   twoD_sens_analysis_only = F,
   restrict_highest_level = F,
   no_STS = F,
+  h = 10,
   identify_outliers_by = NULL,
   response_vars = c('perm_delta_mean_pc', 'delta_mean',
     'scale', 'delta_SE'),
@@ -2176,7 +2219,8 @@ track_sum_stats_as_function_of_var <- function(
       glue('controlled_setting_titration\\
         {make_flag(track_var)}\\
         {make_flag(response_var_string)}.pdf'))
-        if (!IE_requires_computation(fn) && !redo) return(NULL)
+        if (!IE_requires_computation(fn) && !redo)
+          return(NULL)
   }
 
   t_dat <- filter_NN_subs(
@@ -2290,7 +2334,7 @@ track_sum_stats_as_function_of_var <- function(
   if (length(response_vars) > 1) {
     p <- p + facet_grid(var ~ project_extended, scale = 'free',
       labeller = label_parsed)
-    w <- 25 / 8 * uniqueN(t_dat$project_extended)
+    w <- 25 / 8 * uniqueN(t_dat$project_extended) + 1
     if (w == 0) return(NULL)
     cat(track_var, 'width:', w, '\n')
   } else {
@@ -2301,8 +2345,7 @@ track_sum_stats_as_function_of_var <- function(
   }
 
   print_plot_eval(print(p),
-    width = w, height = 17,
-    filename = fn)
+    width = w, height = h, filename = fn)
 }
 
 
@@ -2608,6 +2651,12 @@ test_fe <- function(
 
   stopifnot(is.logical(reverse))
 
+  if (F) {
+    q1 <- function(x) quantile(x, .1)
+    q9 <- function(x) quantile(x, .9)
+    dtf[, list(q1(V1), median(V1), q9(V1)), by = vn]
+  }
+
   out <-
     purrr::map_dbl(levs, function(lev) {
     suppressWarnings(calcGseaStat(
@@ -2629,9 +2678,9 @@ test_fe <- function(
 # test_fe()
 
 
-test_fe_dtf <- function(dtf, id_vars, reverse = F) {
+test_fe_dtf <- function(dtf, id_vars, sort_var = 'delta_n', reverse = F) {
   dtf_o <-
-    dtf[, median(delta_n),
+    dtf[, median(get(sort_var)),
       by = setdiff(id_vars, 'project_extended')][order(V1)]
 
   if (F) {
@@ -2653,6 +2702,7 @@ test_fe_dtf <- function(dtf, id_vars, reverse = F) {
     dtf_o <- maartenutils::clean_columns(fh = dtf_o,
       col_names = colnames(ds_param_grid))
     dtf_o <- cbind(dtf_o, ds_param_grid[dtf_o[, analysis_idx], ])
+    dtf_o <- pretty_overview_dtf(dtf_o)
   }
 
   ET <-
@@ -2674,13 +2724,24 @@ CV_editing <- function(
     dtf = f_setting_dtf,
     tt = 'Thyroid',
     id_vars = c(CV_IE_settings, 'analysis_idx'),
+    # sort_var = 'delta_n',
+    sort_var = 'perm_delta_pq',
     verbose = T,
     reverse = F
   ) {
 
+  ## Prevent f_setting_dtf from getting messed up by setkeyv()
+  dtf <- copy(dtf)
+
   all_tts <- setdiff(levels(dtf$project_extended),
     "Pan*'-'*cancer") %>%
     maartenutils::auto_name()
+
+  test_opt_string_consistency(dtf)
+  test_opt_string_consistency(f_setting_dtf)
+  dtf <- pretty_overview_dtf(dtf)
+  test_opt_string_consistency(dtf)
+  test_opt_string_consistency(f_setting_dtf)
 
   other_tts <- setdiff(all_tts, c(tt, "Pan*'-'*cancer"))
 
@@ -2689,7 +2750,7 @@ CV_editing <- function(
     ## in question and the combination of all the other tumor types
     min_N <- 100
     l_id_vars <- setdiff(id_vars, 'project_extended')
-    tallies <- map(list(tt, other_tts), 
+    tallies <- purrr::map(list(tt, other_tts),
       function(.x) {
         dtf_l <- dtf[project_extended %in% .x]
         ## Also require each level to be observed at least min_N times
@@ -2706,24 +2767,41 @@ CV_editing <- function(
             # out[get(al$var[i]) == al$lev[i]]
           }
         }
-
         out$N <- NULL
         return(out)
       })
-
-    combined_observed_settings <- 
+    test_opt_string_consistency(f_setting_dtf)
+    combined_observed_settings <-
       dplyr::inner_join(tallies[[1]], tallies[[2]], by = l_id_vars)
-
+    test_opt_string_consistency(f_setting_dtf)
     # table(dtf$RNA_expression)
     # table(combined_observed_settings$RNA_expression)
+    test_opt_string_consistency(f_setting_dtf)
+    ## This is the culprit of f_setting_dtf getting messed up
     setkeyv(dtf, l_id_vars)
+    test_opt_string_consistency(f_setting_dtf)
     dtf <- dtf[combined_observed_settings]
+    test_opt_string_consistency(f_setting_dtf)
   }
+
+  test_opt_string_consistency(dtf)
+  test_opt_string_consistency(f_setting_dtf)
 
   dtf_i <- dtf[project_extended == tt]
   dtf_o <- dtf[project_extended %in% other_tts]
+  test_opt_string_consistency(dtf_o)
+  test_opt_string_consistency(dtf_i)
+  test_opt_string_consistency(f_setting_dtf)
+  # dtf_i$sts_filtering
+  # dtf_o$sts_filtering
 
-  ET_o <- test_fe_dtf(dtf_o, id_vars = id_vars, reverse = reverse)
+  ET_o <- test_fe_dtf(dtf_o,
+    id_vars = id_vars,
+    sort_var = sort_var,
+    reverse = reverse)
+  test_opt_string_consistency(dtf_o)
+  test_opt_string_consistency(dtf_i)
+  test_opt_string_consistency(f_setting_dtf)
 
   if (!length(ET_o)) {
     stop('No enrichment found at all')
@@ -2781,6 +2859,7 @@ CV_editing <- function(
     dtf_i_s <- NULL
     dtf_i_us <- dtf_i
   }
+  test_opt_string_consistency(dtf_i)
   dtf_i_us$type = 'Unselected'
 
   # table(subs$RNA_expression)
@@ -2797,7 +2876,9 @@ CV_editing <- function(
     stopifnot(subs_uf[unique(subs[, ..id_vars]), .N] == nrow(subs))
   }
 
-  ET_i <- test_fe_dtf(dtf_i, id_vars = id_vars, reverse = reverse)
+  ET_i <- test_fe_dtf(dtf_i,
+    id_vars = id_vars, sort_var = sort_var, reverse = reverse)
+  test_opt_string_consistency(dtf_i)
   if (F) {
     stopifnot(is.null(subs$type))
     subs <- subs[, !duplicated(colnames(subs)), with = F]
@@ -2932,22 +3013,23 @@ plot_delta_overview <- function(
 
 plot_p_overview <- function(
   t_dat,
+  effect_var = 'delta',
   version_string =
     compile_arg_string(attr(t_dat, 'filtering_args')),
   fn = file.path(IE_img_dir,
     glue::glue('{datef}_p_overview_{version_string}.pdf'))) {
 
-  max_median_delta_n <-
-    max(t_dat[, max(abs(quantile(delta_n, c(.25, .75)))),
+  max_median_effect_var <-
+    max(t_dat[, max(abs(quantile(get(effect_var), c(.25, .75)))),
       by = project_extended]$V1)
 
   p1 <- t_dat[, .N,
     keyby = .(project_extended,
-      # 'sign' = sign(delta_n),
+      # 'sign' = sign(get(effect_var)),
       'sign' = cut(
-        delta_n,
-        breaks = sort(unique(c(0, seq(-max_median_delta_n,
-          max_median_delta_n, length.out = 7))))
+        get(effect_var),
+        breaks = sort(unique(c(0, seq(-max_median_effect_var,
+          max_median_effect_var, length.out = 7))))
       ),
       'p_val_bin' = cut(p_val, c(0, 0.05, 1)))] %>%
     .[!is.na(sign)] %>%
@@ -3032,8 +3114,6 @@ param_sensitivity <- function(dtf,
         source(file.path(IE_root, 'continuous_IE_detection_init.R'))
         call_func(test_continuous_IE, as.list(pick))
 
-        # call_args(test_continuous_IE
-
       } else {
         t_dat <- maartenutils::clean_columns('', t_dat, l_id_vars)
       }
@@ -3046,7 +3126,6 @@ param_sensitivity <- function(dtf,
       t_dat$var <- c_var
       return(t_dat)
     })
-  # summary(p_dat$N)
 
   setDT(p_dat)
   var_titles_l <- setNames(names(var_titles), var_titles)
@@ -3157,6 +3236,16 @@ IE_var_groups <- list(
    'percentile_rank')
 )
 
+IE_var_groups <- list(
+ 'tumor_type' = 'project_extended',
+ 'general' = c('focus_allele', 'overlap_var',
+   'patient_inclusion_crit', 'LOH_HLA',
+   'analysis_name'),
+ 'neo_antigen_prediction' = c('expression_threshold',
+   'VE_threshold', 'sts_filtering', 'RNA_expression',
+   'percentile_rank')
+)
+
 
 annotate_IE_var_groups <- function(dtf) {
   setDT(dtf)
@@ -3168,45 +3257,157 @@ annotate_IE_var_groups <- function(dtf) {
 }
 
 
-plot_subanalysis <- function(pick, 
-  f = pryr::partial(fit_glm_log_, 
+plot_subanalysis <- function(
+  pick,
+  dtf_mod_f = NULL,
+  title_by_acf = FALSE,
+  f = pryr::partial(fit_glm_log_,
     simple_output = TRUE,
     fit_CYT = FALSE, fit_offset = TRUE, fit_PS = TRUE),
-  f_alt = pryr::partial(fit_glm_log_, 
-    simple_output = TRUE,
-    fit_CYT = FALSE, fit_offset = TRUE, fit_PS = FALSE)) {
+  return_alt = FALSE) {
+
   args <- pick %>%
     pan_IE_res_to_call_args() %>%
     { . }
   prep1 <- call_func(prep_cont_IE_analyses,
     modifyList(args, list('permute_y' = F)))
   dtf <- prep1$dtf
+  if (!is.null(dtf_mod_f)) {
+    dtf <- dtf_mod_f(dtf)
+  }
 
+  dtf <- dtf[order(i)]
   fit <- f(dtf)
-  fit_alt <- f_alt(dtf)
 
   if (F && !is.null(pick$delta)) {
     stopifnot(fit$delta == pick$delta)
   }
 
+  cols <- c('#C2DEE7', '#FF7C69')
+
+  p1 <- ggplot(fit$data,
+    aes(x = i, y = c, colour = ol)) +
+    ggrastr::rasterise(geom_point(alpha = .3, size = .3), dpi = 300) +
+    scale_colour_gradient(low = cols[1], high = cols[2],
+      name = 'Presentation\nscore', breaks = c(0, 0.1, .5, 1)) +
+    ylab('Predicted\nneo-antigens\n(log10 + 1)') +
+    xlab('#SNVs\n(log10 + 1)')
+
+  lt = 'dashed'
+  if (all(names(coef(fit)) == c('(Intercept)',  'i', 'i:ol'))) {
+    p1 <- p1 +
+      geom_abline(
+        intercept = coef(fit)[['(Intercept)']],
+        slope = coef(fit)[['i']],
+        colour = cols[1],
+        linetype = lt
+      ) +
+      geom_abline(
+        intercept = coef(fit)[['(Intercept)']],
+        slope = coef(fit)[['i']] + coef(fit)[['i:ol']],
+        colour = cols[2],
+        linetype = lt
+      ) +
+      theme(legend.position = 'right') +
+      theme()
+  }
+
+  return(p1)
+}
+
+
+plot_subanalysis_extended <- function(
+  pick,
+  dtf_mod_f = NULL,
+  title_by_acf = FALSE,
+  f = pryr::partial(fit_glm_log_,
+    simple_output = TRUE,
+    fit_CYT = FALSE, fit_offset = TRUE, fit_PS = TRUE),
+  f_alt = pryr::partial(fit_glm_log_,
+    simple_output = TRUE,
+    fit_CYT = FALSE, fit_offset = TRUE, fit_PS = FALSE),
+  return_alt = FALSE) {
+
+  args <- pick %>%
+    pan_IE_res_to_call_args() %>%
+    { . }
+  prep1 <- call_func(prep_cont_IE_analyses,
+    modifyList(args, list('permute_y' = F)))
+  dtf <- prep1$dtf
+  if (!is.null(dtf_mod_f)) {
+    dtf <- dtf_mod_f(dtf)
+  }
+
+  dtf <- dtf[order(i)]
+  # pacman::p_load('tseries')
+  fit <- f(dtf)
+
+  if (!is.null(f_alt)) {
+    fit_alt <- f_alt(dtf)
+  }
+
+  # if (F) {
+  #   test_res <- call_func(test_continuous_IE,
+  #     c(args)[['stats']][[as.character(pick$project_extended)]][[1]])
+  #   test_res <- call_func(test_continuous_IE,
+  #     c(args, list(include_perms = TRUE)))
+  # }
+
+  if (F && !is.null(pick$delta)) {
+    stopifnot(fit$delta == pick$delta)
+  }
+
+  fit$data$ol_b <- cut(fit$data$ol, seq(0, 1, by = .25))
+
+  # acf_tit <- tryCatch(
+  #   round(acf(residuals(fit), pl=FALSE, lag.max = 2)$acf[, , 1][2], 3),
+  #   error = function(e) { print(e); NULL })
+
   p1 <- ggplot(fit$data,
     aes(x = i, y = c, colour = ol)) +
     ggrastr::rasterise(geom_point(alpha = .3), dpi = 300)
+
+  # if (title_by_acf) {
+  #   p1 <- p1 + ggtitle(acf(residuals(fit), pl=FALSE)['1'])
+  # }
 
   if (all(names(coef(fit)) == c('(Intercept)',  'i', 'i:ol'))) {
     p1 <- p1 +
       geom_abline(
         intercept = coef(fit)[['(Intercept)']],
         slope = coef(fit)[['i']],
-        colour = 'grey10'
+        colour = '#C2DEE7'
       ) +
       geom_abline(
         intercept = coef(fit)[['(Intercept)']],
         slope = coef(fit)[['i']] + coef(fit)[['i:ol']],
-        colour = 'purple'
+        # colour = 'purple'
+        colour = '#FF7C69'
       ) +
       theme(legend.position = 'right') +
       theme()
+
+    if (return_alt) {
+      p1a <- ggplot(fit$data,
+        aes(x = i, y = c, colour = ol)) +
+        ggrastr::rasterise(geom_point(alpha = .3), dpi = 300) +
+        geom_quantile(quantiles = .5, colour = 'grey10') +
+        # geom_smooth(method = 'lm') +
+        theme(legend.position = 'right') +
+        facet_wrap(~ol_b, nrow = 1)
+
+      if (title_by_acf) {
+        p1a <- p1a + ggtitle(acf_tit)
+      }
+
+      if (F) {
+        print_plot_eval(print(p1a),
+          width = 17.4, height = 10,
+          filename = file.path(IE_img_dir, 'test_scatter.pdf'))
+      }
+
+      return(p1a)
+    }
 
     if (F) {
       ## Sanity checks
@@ -3224,10 +3425,10 @@ plot_subanalysis <- function(pick,
         coef(fit)[['i']] * fit$data$i
       yhat_ps <- yhat_basic +
         coef(fit)[['i:ol']] * fit$data$i * fit$data$ol
-      fit$data$improv <- 
+      fit$data$improv <-
         with(fit$data, (yhat_ps - yhat_basic) / yhat_basic)
     } else {
-      fit$data$improv <- 
+      fit$data$improv <-
         (residuals(fit) - residuals(fit_alt)) / residuals(fit_alt)
       # mean(residuals(fit_alt)) - mean(residuals(fit))
       # summary(fit$data$improv)
@@ -3235,7 +3436,7 @@ plot_subanalysis <- function(pick,
     }
 
     p_eps = .03
-    fit$data$ol_b <- cut(fit$data$ol, seq(0, 1, by = .25))
+    # fit$data$ol_b <- cut(fit$data$ol, seq(0, 1, by = .25))
     fit$data$ol_b <- cut(fit$data$ol, seq(0, 1, by = .1))
     p2 <- ggplot(fit$data, aes(x = ol_b, y = improv)) +
       geom_boxplot() +
@@ -3246,16 +3447,52 @@ plot_subanalysis <- function(pick,
       theme(legend.position = 'right') +
       # gg_tabula_rasa +
       scale_y_continuous(
-        name = 'Fractional change in residuals', 
+        name = 'Fractional change in residuals',
         expand = c(0, 0)
       ) +
-      scale_x_discrete(name = 'Binned presentation score', 
+      scale_x_discrete(name = 'Binned presentation score',
         expand = c(0, 0)) +
       theme()
     if (F) {
       print_plot_eval(print(p2),
         width = 17.4, height = 10,
         filename = file.path(IE_img_dir, 'test_residuals.pdf'))
+    }
+
+    test_out <- glm_fit_model(dtf, include_perms = TRUE)
+    c_dat <- attr(test_out, 'perms')
+
+    p_eps = .01
+
+    marginal_boxplot <-
+      ggplot(c_dat,
+      aes_string(x = '1', y = 'y_var')) +
+      geom_boxplot(alpha = .5, width = .5, outlier.size = .5,
+        fill = 'firebrick3') +
+      scale_x_continuous(name = 'Anchor carriers', breaks = c(1)) +
+      scale_y_continuous(name = '', limits = c(0, y_max)) +
+      theme_fas(
+        axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank())
+
+    if (T) {
+      p_scat <- ggplot(c_dat, aes(x = intercept, y = rc)) +
+        geom_hline(yintercept = 0) +
+        geom_vline(xintercept = 0) +
+        ggrastr::rasterise(
+          geom_point(size = 1, alpha = .5, colour = 'grey10'),
+          dpi = 300) +
+        coord_cartesian(
+          # ylim = c(quantile(fit$data$improv, p_eps), 0)
+          xlim = quantile(c_dat$intercept, c(p_eps, 1-p_eps))
+        ) +
+        annotate('point', x = test_out$intercept, y = test_out$rc,
+          color = 'red') +
+        theme()
+      print_plot_eval(print(p_scat),
+        width = 17.4, height = 10,
+        filename = file.path(IE_img_dir, 'perm_scatter.pdf'))
     }
 
     p3 <- ggplot(fit$data, aes(x = ol, y = improv)) +
@@ -3272,10 +3509,10 @@ plot_subanalysis <- function(pick,
       ) +
       # geom_smooth(span = 100) +
       theme(legend.position = 'right') +
-      scale_x_continuous(name = 'Presentation score', 
+      scale_x_continuous(name = 'Presentation score',
         expand = c(0, 0)) +
       scale_y_continuous(
-        name = 'Fractional change in residuals', 
+        name = 'Fractional change in residuals',
         expand = c(0, 0)
       ) +
       theme()
@@ -3303,7 +3540,9 @@ plot_subanalysis <- function(pick,
 }
 
 
-perform_settings_tally <- function(dtf, id_vars) {
+perform_settings_tally <- function(dtf, id_vars,
+  by_vars = 'project_extended') {
+
   if (maartenutils::null_dat(dtf)) return(NULL)
   setDT(dtf)
 
@@ -3311,15 +3550,15 @@ perform_settings_tally <- function(dtf, id_vars) {
   total_N <-
     prod(map_dbl(id_vars, function(v) dtf[, uniqueN(get(v))]))
 
-  out <- 
+  out <-
     purrr::map(id_vars, function(lv) {
       N_levs <- dtf[, uniqueN(get(lv))]
       if (N_levs == 1) return(NULL)
       dtf[, .(
-        'var' = lv, 
+        'var' = lv,
         'N' = .N,
         'frac_observed' = .N * N_levs / total_N),
-        keyby = c('lev' = lv)] %>%
+        keyby = c('lev' = lv, by_vars)] %>%
         .[, 'lev' := get(lv)] %>%
         .[, (lv) := NULL]
     }) %>%
@@ -3342,23 +3581,25 @@ recode_RNA_expression <- function(dtf) {
   prefixes <- c('TPM=', 'VE=')
 
   for (i in seq_along(vns)) {
-    new_levs <- 
-      levels(dtf[, get(vns[i])]) %>%
-      setdiff('none') %>%
-      { setNames(., paste0(prefixes[i], .)) } %>%
-      { c('none' = 'none', .) }
-    dtf[, (vns[i]) := forcats::fct_recode(get(vns[i]), !!!new_levs)]
-    # levels(dtf[[vns[i]]])
-    # dtf[, table(get(vns[i]))]
+    orig_levs <- levels(dtf[, get(vns[i])]) %>%
+      setdiff('none')
+    if (!any(grepl(prefixes[i], orig_levs))) {
+      new_levs <- orig_levs %>%
+        { setNames(., paste0(prefixes[i], .)) } %>%
+        { c('none' = 'none', .) }
+      dtf[, (vns[i]) := forcats::fct_recode(get(vns[i]), !!!new_levs)]
+      # levels(dtf[[vns[i]]])
+      # dtf[, table(get(vns[i]))]
+    }
   }
 
   dtf[, 'RNA_expression' := ifelse(
     expression_threshold != 'none',
-    as.character(expression_threshold), 
+    as.character(expression_threshold),
     ifelse(VE_threshold != 'none', as.character(VE_threshold), 'none'))]
-  levs <- c(levels(dtf$expression_threshold), 
+  levs <- c(levels(dtf$expression_threshold),
     levels(dtf$VE_threshold)) %>% unique()
-  dtf[, 'RNA_expression' := factor(as.character(RNA_expression), 
+  dtf[, 'RNA_expression' := factor(as.character(RNA_expression),
     levels = levs)]
 
   if (F) {
@@ -3368,3 +3609,813 @@ recode_RNA_expression <- function(dtf) {
 
   return(dtf)
 }
+
+
+plot_overview_volcano <- function(
+  dtf,
+  effect_var = 'delta',
+  p_var = 'p_val',
+  add_sig = TRUE,
+  p_eps = .025) {
+
+  if (maartenutils::null_dat(dtf)) return(NULL)
+
+  # dtf[which(dtf[[p_var]] < .05), ]
+
+  p_var_trans_f <- function(x) -log10(x + 1e-5)
+  p_var_trans_f <- function(x) x
+  p_var_trans_f <- function(x) -log10(x)
+
+  p_eps = .025
+  p_eps = .01
+  if (add_sig) {
+    pos_dtf <- data.table(
+      sign = c(-1L, -1L, -1L, 1L, 1L, 1L),
+      'sig' = c('neg', 'none', 'pos', 'neg', 'none', 'pos'),
+      xpos = c(p_eps, p_eps, p_eps, 1-p_eps, 1-p_eps, 1-p_eps),
+      ypos = c(p_eps, .5, 1-p_eps, p_eps, .5, 1-p_eps)
+    )
+    pos_dtf <- data.table(
+      sign = c(-1L, -1L, 1L, 1L),
+      'sig' = c('neg', 'none', 'neg', 'none'),
+      xpos = c(p_eps, p_eps, 1-p_eps, 1-p_eps),
+      ypos = c(p_eps, 1-p_eps, p_eps, 1-p_eps)
+    )
+    quartile_tallies <-
+      dtf[, .N, keyby = .(
+        project_extended,
+        'sign' = sign(get(effect_var)),
+        'sig' = ifelse(
+          p_var_trans_f(get(p_var)) < p_var_trans_f(0.05),
+          'neg',
+          ifelse(p_var_trans_f(get(p_var)) > p_var_trans_f(0.95),
+            'pos', 'none'))
+        )] %>%
+    .[, 'frac' := N / sum(N), by = project_extended]
+
+    quartile_tallies$frac_f <-
+      unlist(maartenutils::fancy_scientific(quartile_tallies$frac))
+    setkeyv(quartile_tallies, c('sign', 'sig'))
+    ## Left-join annotation coordinates
+    quartile_tallies <- quartile_tallies[pos_dtf]
+    quartile_tallies <- quartile_tallies[!is.na(project_extended)]
+
+    lower_thresh_dat <- quartile_tallies[sign == -1 & sig == 'neg'] %>%
+      .[, yv := p_var_trans_f(.05)]
+    upper_thresh_dat <- quartile_tallies[sign == 1 & sig == 'pos'] %>%
+      .[, yv := p_var_trans_f(.95)]
+  }
+
+  dtf[['p_var_trans']] <- p_var_trans_f(dtf[[p_var]])
+
+  p <- ggplot(dtf, aes_string(
+      x = effect_var,
+      y = 'p_var_trans'
+    ))
+
+  if (add_sig) {
+    p <- p +
+      geom_hline(data = lower_thresh_dat, mapping = aes(yintercept = yv), color = 'indianred3') +
+      geom_hline(data = upper_thresh_dat, mapping = aes(yintercept = yv), color = 'indianred3')
+  }
+
+  p_eps_x <- .01
+  p <- p +
+    geom_vline(xintercept = 0, color = 'grey10') +
+    ggrastr::rasterise(
+      geom_point(size = .1, alpha = .1, color = 'grey10'),
+      dpi = 300) +
+    # geom_density_2d_filled() +
+    coord_cartesian(
+      ylim = quantile(dtf[['p_var_trans']], c(0, 1)),
+      xlim = quantile(dtf[[effect_var]], c(p_eps_x, 1-p_eps_x))
+    ) +
+    facet_wrap(~project_extended, labeller = label_parsed) +
+    theme(
+      legend.position = 'right',
+      plot.margin = margin(.1, .1, .1, .1, 'cm')
+    ) +
+    ggpp::geom_text_npc(data = quartile_tallies,
+      inherit.aes = FALSE, color = 'indianred3', size = 2,
+      alpha = .95,
+      parse = TRUE,
+      mapping = aes(npcx = xpos, npcy = ypos, label = frac_f)) +
+    theme()
+  if (F) {
+    print_plot_eval(print(p),
+      width = 17.4, height = 8,
+      filename = file.path(IE_img_dir,
+        glue::glue('volcano_test.pdf')))
+  }
+
+  return(p)
+}
+
+
+plot_delta_perm_relationship <- function(dtf, p_eps = .025,
+  title = NULL) {
+  p <- ggplot(dtf, aes(x = delta, y = perm_delta_median)) +
+    # geom_density_2d_filled() +
+    geom_hline(yintercept = 0) +
+    geom_vline(xintercept = 0) +
+    ggrastr::rasterise(
+      geom_point(alpha = .05, size = .1, colour = 'grey10'), dpi = 300) +
+    geom_density_2d() +
+    coord_cartesian(
+      xlim = quantile(dtf$delta, c(p_eps, 1-p_eps)),
+      ylim = quantile(dtf$perm_delta_median, c(p_eps, 1-p_eps))
+    ) +
+    theme(legend.position = 'right')
+  if (!is.null(title)) {
+    p <- p + ggtitle(title)
+  }
+  return(p)
+}
+
+
+tidy <- function(...) UseMethod('tidy')
+
+
+tidy.lmp <- function (x, conf.int = TRUE, conf.level = 0.95,
+  ...) {
+  ret <- as_tibble(summary(x)$coefficients, rownames = 'term')
+  colnames(ret) <- c('term', 'estimate', 'iter', 'p.value')
+  coefs <- tibble::enframe(stats::coef(x), name = 'term',
+    value = 'estimate')
+  ret <- left_join(coefs, ret, by = c('term', 'estimate'))
+
+  if (conf.int) {
+    ci <- broom:::broom_confint_terms(x, level = conf.level)
+    ret <- dplyr::left_join(ret, ci, by = 'term')
+  }
+
+  return(ret)
+}
+
+
+plot_CV_results <- function(CV_settings, yvar = 'delta_n', ranking = 'top') {
+  CV_settings %>%
+  # map(~.x[[ranking]]) %>%
+  purrr::map(function(x) {
+    tt <- as.character(x$dtf$project_extended)[1]
+
+    nrow(x$dtf) == p_setting_dtf[project_extended == tt, .N]
+    x$dtf$type <- factor(x$dtf$type, levels = c('unselected', 'selected'))
+
+    p_eps = .025
+    p1 <-
+      ggplot(x$dtf, aes_string(x = 'type', y = yvar, fill = 'type')) +
+      geom_hline(yintercept = 0) +
+      geom_boxplot(outlier.shape = NA) +
+      # geom_violin(draw_quantiles = c(.25, .5, .75),
+      #   # color = 'indianred3',
+      #   # fill = 'indianred3',
+      #   # show.legend = FALSE,
+      #   alpha = .2) +
+      # stat_summary(
+      #   fun = 'median', colour = 'red',
+      #   geom = 'point',
+      #   size = 2,
+      #   show.legend = FALSE
+      # ) +
+      scale_fill_manual(
+        values = c(
+          'Remaining' = 'indianred3',
+          'Filtered out' = 'grey70'),
+        guide = 'none') +
+      coord_cartesian(
+        ylim = quantile(x$dtf$delta_n, c(p_eps, 1-p_eps))
+      ) +
+      ggtitle(parse(text = tt)) +
+      # facet_grid(~ranking) +
+      xlab('') +
+      ylab(expression(Delta)) +
+      theme(legend.position = 'right')
+    # ggsave(p1,
+    #   width = 17.4, height = 10,
+    #   unit = 'cm',
+    #   filename = file.path(IE_img_dir,
+    #     glue::glue('ranking_comp_{ranking}.pdf')))
+
+    # p2 <- ET2grob(x$ET_o)
+    # p3 <- ET2grob(x$ET_i)
+
+    merged <-
+      dplyr::inner_join(
+        ET2dtf(x$ET_o, ES_name = 'ES_o'),
+        ET2dtf(x$ET_i, ES_name = 'ES_i'),
+        by = c('type', 'level')
+      )
+
+    # merged %>%
+    #   dplyr::mutate(comp = factor(sign(ES_o) == sign(ES_i))) %>%
+    #   dplyr::group_by(comp) %>%
+    #   dplyr::summarize(
+    #     min = min(abs(ES_o), abs(ES_i)),
+    #     max = max(abs(ES_o), abs(ES_i))
+    #   )
+
+    if (FALSE) {
+      threshold <-
+        merged %>%
+          dplyr::mutate(comp = factor(sign(ES_o) == sign(ES_i))) %>%
+          dplyr::filter(comp == FALSE) %>%
+          dplyr::summarize(max(pmax(abs(ES_o), abs(ES_i)))) %>%
+          unlist() %>%
+          unname() %>%
+          { . }
+    } else {
+      threshold <- .25
+    }
+
+    hl_dtf <-
+      merged %>%
+      dplyr::filter(abs(ES_o) >= threshold | abs(ES_i) >= threshold)
+
+    l_type_pal <- IE_settings_pal
+    lame_types <-
+      merged %>%
+      dplyr::group_by(type) %>%
+      dplyr::summarize(max_ES = max(pmax(abs(ES_o), abs(ES_i)))) %>%
+      # dplyr::summarize(max_ES = max(abs(ES_o))) %>%
+      # dplyr::summarize(max_ES = max(ES_o)) %>%
+      dplyr::filter(max_ES < .2) %>%
+      pull(type)
+    l_type_pal[lame_types] <- 'grey70'
+
+    xrange <- max(abs(range(merged$ES_i)), .25) %>%
+      { c(-1 *., .) }
+    yrange <- max(abs(range(merged$ES_o)), .25) %>%
+      { c(-1 *., .) }
+    p4 <-
+      ggplot(merged, aes(x = ES_i, y = ES_o, color = type,
+          label = level)) +
+        geom_rect(xmin = -threshold, xmax = threshold,
+          ymin = -threshold, ymax = threshold,
+          color = NA,
+          alpha = .01, fill = 'indianred3') +
+        geom_vline(xintercept = 0) +
+        geom_hline(yintercept = 0) +
+        geom_point() +
+        coord_cartesian(xlim = xrange, ylim = yrange) +
+        scale_colour_manual(name = 'Subanalysis setting',
+          values = l_type_pal) +
+        # xlab(parse(text = glue::glue('Enrichment factor\nwithin {tt}')) +
+        xlab(glue::glue('Enrichment factor\nwithin tumor type')) +
+        ylab('Enrichment factor\noutside of tumor type') +
+        ggrepel::geom_text_repel(data = hl_dtf, show.legend = F,
+          size = 2) +
+        # geom_vline(xintercept = threshold, linetype = 2) +
+        # geom_hline(yintercept = threshold, linetype = 2) +
+        # geom_vline(xintercept = -threshold, linetype = 2) +
+        # geom_hline(yintercept = -threshold, linetype = 2) +
+        theme(legend.position = 'left')
+    if (F) {
+      ggsave(p4,
+        width = 17.4, height = 10,
+        unit = 'cm',
+        filename = file.path(IE_img_dir,
+          glue::glue('ranking_comp_{ranking}.pdf')))
+    }
+
+    library(patchwork)
+    # design <- 'AA
+    # BC'
+    # return(wrap_plots(p1, p2, p3, design = design))
+    return(wrap_plots(p4, p1))
+  })
+}
+
+
+plot_CV_overview <- function(CV_settings) {
+  ## tumor type
+  ## --> XXX top, bottom
+  ##   --> ET_i, ET_o
+  ##     --> var
+
+
+  CV_settings[[3]][[2]]$sts_filtering
+
+  var_titles_l <- setNames(names(var_titles), var_titles)
+  p_dat <-
+    map(CV_settings, ~ET2dtf(.x[['ET_i']], ES_name = 'ES_i')) %>%
+    imap_dfr(~cbind(.x, 'project_extended' = .y)) %>%
+    setDT() %>%
+    .[, var_print := forcats::fct_recode(type, !!!var_titles_l)] %>%
+    annotate_IE_var_groups() %>%
+    { . }
+
+  if (any(is.na(p_dat$level))) {
+    browser()
+  }
+
+  # CV_settings[[1]]$ET_i$percentile_rank[, 1]
+  # CV_settings[[1]]$ET_i$sts_filtering
+  # p_setting_dtf$percentile_rank
+  # levels(p_setting_dtf$sts_filtering)
+
+  level_ordering <-
+    names(var_titles) %>%
+    # c('project_extended') %>%
+    intersect(colnames(p_setting_dtf)) %>%
+    map(~p_setting_dtf[, levels(get(.x))]) %>%
+    unlist(recursive = F) %>%
+    unique()
+  # levels(p_dat$level)
+  p_dat$level <- factor(p_dat$level, levels = level_ordering)
+  if (F) {
+    p_dat$n_level <- factor(p_dat$level, levels = level_ordering)
+    p_dat[is.na(n_level)]
+  }
+
+  if (any(is.na(p_dat$level))) {
+    browser()
+  }
+  p_dat$project_extended <- factor(p_dat$project_extended,
+    levels = levels(p_setting_dtf$project_extended))
+  # p_dat[var_print == 'Affinity rank percentile threshold']
+  p_dat[var_print == 'Similarity to self filter']
+  unique(p_dat$var_print)
+
+  stopifnot(nrow(p_dat[var_group == '']) == 0)
+
+  max_plots <- p_dat[, uniqueN(var_print), by = var_group][, max(V1)]
+
+  N_var_groups <- length(unique(p_dat$var_group))
+
+  pacman::p_load('colorspace')
+  #' Make a row of plots for each group
+  #' Each plot shows one variable (var_print), with multiple levels of
+  #' that variable (horizontal axis) and tumor types on the vertical
+  #' axis. Aim to adjust widths of plots to the number of levels in
+  #' them, such that all levels get assigned identical widths.
+  #'
+  plot_lists <- purrr::imap(unique(p_dat$var_group), function(vg, j) {
+    l_p_dat <- p_dat[var_group == vg]
+    N_plots <- l_p_dat[, uniqueN(var_print)]
+    N_levs <- map_int(unique(l_p_dat$var_print),
+      ~length(unique(l_p_dat[var_print == .x]$level)))
+    plots <- purrr::imap(unique(l_p_dat$var_print), function(varp, i) {
+      p <- ggplot(l_p_dat[var_print == varp],
+        aes(x = level, y = project_extended,
+          color = ES_i, size = abs(ES_i))) +
+        geom_point() +
+        # facet_wrap(~var_print, scale = 'free_x', nrow = 3)  +
+        # scale_colour_diverging() +
+        scale_colour_continuous_diverging(
+          name = 'Enrichment\nstatistic',
+          limits = quantile(p_dat$ES_i, c(0, 1))
+        ) +
+        scale_size_continuous(
+          guide = 'none',
+          range = c(.1, 2),
+          limits = quantile(p_dat$ES_i, c(0, 1))
+        ) +
+        scale_y_discrete(labels = function(x) parse(text = x)) +
+        rotate_x_labels(45) +
+        xlab('') +
+        ggtitle(varp) +
+        ylab('') +
+        theme(legend.position = 'left') +
+        theme(plot.margin = margin(.1, .1, .1, .1, 'cm'))
+      if (i > 1) {
+        p <- p + theme(
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          legend.position = 'none'
+        )
+      } else {
+        # p <- p + ggtitle(varp)
+      }
+      if (j < N_var_groups) {
+        p <- p + theme(legend.position = 'none')
+      }
+      # print_plot_eval(print(p),
+      #   width = 17.4, height = 15,
+      #   filename = file.path(IE_img_dir,
+      #     glue::glue('settings_IE_GSEA_overview.pdf')))
+      return(p)
+    })
+    if (N_plots < max_plots) {
+      white_space <- map(seq(1, max_plots - N_plots), ~plot_spacer())
+    } else {
+      white_space <- NULL
+    }
+    N_levs_norm <- N_levs %>% { . / sum(.) }
+    wrap_plots(c(plots, white_space),
+      guides = 'collect',
+      widths = c(1/max_plots * N_levs_norm,
+        rep(1/max_plots, max_plots - N_plots))) +
+      plot_annotation(title = vg, caption = 'test')
+  })
+
+  return(plot_lists)
+}
+
+
+#' Find groups of sub-analyses that differ by only one setting and go
+#' down in delta, or any other response var, with every level increase
+#' in the setting
+#'
+#'
+find_neg_groups <- function(
+  track_var = 'VE_threshold') {
+
+  redo = F
+  identify_relative_outliers_by = NULL
+  twoD_sens_analysis_only = FALSE
+  restrict_highest_level = FALSE
+  no_STS = FALSE
+  identify_outliers_by = NULL
+  response_vars = c('delta')
+  # sort_var = response_vars[1]
+  sort_var = 'delta'
+
+  f_setting_dtf$RNA_expression <- NULL
+  f_setting_dtf <- drop_high_VE(f_setting_dtf)
+  # f_setting_dtf[, RNA_expression := droplevels(RNA_expression)]
+  # f_setting_dtf$analysis_idx <- NULL
+
+  all_levs <- f_setting_dtf[, levels(get(track_var))]
+  offset_lev <- all_levs[1]
+  top_lev <- all_levs[length(all_levs)]
+  N_levs <- f_setting_dtf[, length(levels(get(track_var)))]
+
+  set.seed(3)
+  t_dat <- filter_NN_subs(
+    t_dat = f_setting_dtf,
+    track_var = track_var,
+    restrict_highest_level = restrict_highest_level,
+    no_STS = no_STS,
+    identify_relative_outliers_by = identify_relative_outliers_by,
+    twoD_sens_analysis_only = twoD_sens_analysis_only,
+    identify_outliers_by = identify_outliers_by,
+    response_vars = response_vars,
+    max_groups = 1e4
+  )
+  # t_dat$var <- NULL
+  # t_dat[, .N, by = group_id][, table(N)]
+  # t_dat[group_id == 17]
+  # f_setting_dtf$intercept > 0
+
+  ## Identify groups that go down with increase of the track var
+  all_neg_groups <-
+    t_dat[var == 'delta',
+  .(.N, 
+    'all_neg' = .SD[order(get(track_var)), all(sign(diff(value)) == -1)]),
+  by = group_id] %>%
+    .[all_neg == TRUE]
+  stopifnot(length(unique(all_neg_groups$N)) == 1)
+
+  N_picks = 1000
+  # message(glue::glue('{response_vars[1]} will be used to'))
+  picks <-
+    t_dat[group_id %in% all_neg_groups[, group_id]] %>%
+    # .[var == response_vars[1]] %>%
+    .[get(track_var) == offset_lev] %>%
+    .[var == 'delta'] %>%
+    .[sample(1:nrow(.), min(N_picks, nrow(.)))]
+  # t_dat[group_id == 36][order(get(track_var))]
+
+  l_id_cols <- setdiff(colnames(picks), 
+    c('var', 'value', track_var, 'analysis_idx', 'RNA_expression')) %>%
+    intersect(colnames(t_dat))
+
+  setkeyv(t_dat, l_id_cols)
+  setkeyv(picks, l_id_cols)
+  picks <- 
+    t_dat[group_id %in% all_neg_groups[, group_id]] %>%
+    .[get(track_var) == top_lev] %>%
+    .[picks] %>%
+    # .[VE_threshold != i.VE_threshold]
+    { . }
+  picks$var <- picks$i.var <- NULL
+  # picks$analysis_idx <- picks$i.analysis_idx <- NULL
+
+  colnames(picks) <- stringr::str_replace(colnames(picks), 'i\\.', 'cons_')
+
+  return(picks)
+}
+
+
+diagnose_regression <- function(
+  pick = NULL, 
+  l_dtf = NULL, 
+  do_fit = TRUE,
+  fit_func = fit_glm_log_,
+  prefix = NULL) {
+
+  if (!is.null(pick)) {
+    prep <- call_func(prep_cont_IE_analyses,
+      pan_IE_res_to_call_args(pick))
+    l_dtf <- prep$dtf
+  } else {
+    stopifnot(!is.null(l_dtf))
+  }
+
+  if (do_fit) {
+    out <- fit_func(l_dtf, simple_output = FALSE)
+  } else {
+    out <- list()
+  }
+
+  ## Determine the yr 
+  out$mean_yr <- l_dtf[, mean(c / i)]
+
+  if (TRUE) {
+    fit <- fit_func(l_dtf, simple_output = TRUE)
+    leverage <- hatvalues(fit)
+    cooksd <- cooks.distance(fit)
+    out$leverage_evenness <- compute_evenness(abs(leverage))
+    out$cooksd_evenness <- compute_evenness(abs(cooksd))
+    # out$baseline_yr <- coef(fit)[['(Intercept)']] + 
+    #       median(fit$data$i) * coef(fit)[['i']]
+    median_TMB <- median(fit$data$i)
+    out$baseline_NAYR <- coef(fit)[['(Intercept)']] / median_TMB + 
+      coef(fit)[['i']]
+    out$slope_NAYR <- 1/median_TMB * coef(fit)[['i:ol']]
+  }
+
+  if (TRUE) {
+    ps_fit <- lm(i ~ ol, data = l_dtf, weights = leverage)
+    # if (coef(ps_fit)['(Intercept)'] < 0) browser()
+    out$ol_vs_i_rc <- coef(ps_fit)['ol']
+    out$ol_vs_i_rc_n <- coef(ps_fit)['ol'] / coef(ps_fit)['(Intercept)']
+  }
+
+  if (!is.null(prefix)) {
+    out <- setNames(out, paste0(prefix, names(out)))
+  }
+  # print(out)
+
+  return(out)
+}
+
+
+set_lower_yr <- function(pick,
+  fit_func = fit_glm_log_,
+  factors = sort(unique(c(10^seq(-4, 4, by = 1), 1)))) {
+
+  ## The 'cons_' variables refer to the 'conservative' setting and non
+  ## prefixed setting refer to the 'aggressive' setting in the
+  ## comparison
+
+  ## Determine name of the tracked variable
+  tv_cons <- 
+    stringr::str_subset(colnames(pick), 'cons_') %>%
+    setdiff(c('cons_value', 'cons_analysis_idx'))
+  tv <- stringr::str_replace(tv_cons, 'cons_', '')
+
+  out_aggressive <- diagnose_regression(
+    pick = pick, 
+    fit_func = fit_func,
+    prefix = 'aggressive_')
+
+  conservative_pick <- copy(pick)
+  conservative_pick[, (tv) := get(tv_cons)]
+  conservative_pick[, analysis_idx := cons_analysis_idx]
+  out_conservative <- diagnose_regression(
+    pick = conservative_pick, 
+    fit_func = fit_func,
+    prefix = 'conservative_')
+
+  ## Do we already see a negative delta at a constant neo-antigen
+  ## yield rate with the current distribution of the data?
+  conservative_prep <- call_func(prep_cont_IE_analyses,
+    pan_IE_res_to_call_args(conservative_pick))
+  l_dtf <- copy(conservative_prep$dtf)
+  l_dtf$c <- round(l_dtf$i * out_aggressive$aggressive_mean_yr, 1)
+  out_constant <- diagnose_regression(
+    l_dtf = l_dtf, 
+    fit_func = fit_func,
+    prefix = 'constant_')
+
+  ## Do we already see a negative delta with the conservative data
+  ## scaled to have a similar yield rate as the aggressive data?
+  fc <- out_aggressive$aggressive_mean_yr / out_conservative$conservative_mean_yr
+  l_dtf <- copy(conservative_prep$dtf)
+  l_dtf$c <- round(l_dtf$c * fc, 1)
+  out_scaled <- diagnose_regression(
+    l_dtf = l_dtf, 
+    fit_func = fit_func,
+    prefix = 'scaled_')
+
+  out <- c(out_aggressive, out_conservative, out_constant, out_scaled)
+
+  return(out)
+}
+
+
+plot_subanalysis <- function(
+  pick,
+  dtf_mod_f = NULL,
+  title_by_acf = FALSE,
+  fit_func = pryr::partial(fit_glm_log_,
+    simple_output = TRUE,
+    fit_CYT = FALSE, fit_offset = TRUE, fit_PS = TRUE),
+  return_alt = FALSE) {
+
+  args <- pick %>%
+    pan_IE_res_to_call_args() %>%
+    { . }
+  prep1 <- call_func(prep_cont_IE_analyses,
+    modifyList(args, list('permute_y' = F)))
+  dtf <- prep1$dtf
+  if (!is.null(dtf_mod_f)) {
+    dtf <- dtf_mod_f(dtf)
+  }
+
+  dtf <- dtf[order(i)]
+  fit <- fit_func(dtf)
+
+  if (F && !is.null(pick$delta)) {
+    stopifnot(fit$delta == pick$delta)
+  }
+
+  cols <- c('#C2DEE7', '#FF7C69')
+
+  p1 <- ggplot(fit$data,
+    aes(x = i, y = c, colour = ol)) +
+    ggrastr::rasterise(geom_point(alpha = .3, size = .3), dpi = 300) +
+    scale_colour_gradient(low = cols[1], high = cols[2],
+      name = 'Presentation\nscore', breaks = c(0, 0.1, .5, 1)) +
+    ylab('Predicted\nneo-antigens\n(log10 + 1)') +
+    xlab('#SNVs\n(log10 + 1)')
+
+  lt = 'dashed'
+  if (all(names(coef(fit)) == c('(Intercept)',  'i', 'i:ol'))) {
+    p1 <- p1 +
+      geom_abline(
+        intercept = coef(fit)[['(Intercept)']],
+        slope = coef(fit)[['i']],
+        colour = cols[1],
+        linetype = lt
+      ) +
+      geom_abline(
+        intercept = coef(fit)[['(Intercept)']],
+        slope = coef(fit)[['i']] + coef(fit)[['i:ol']],
+        colour = cols[2],
+        linetype = lt
+      ) +
+      theme(legend.position = 'right') +
+      theme()
+  }
+
+  return(p1)
+}
+
+
+plot_subanalysis_yr_vs_ps <- function(
+  pick,
+  dtf_mod_f = NULL,
+  title_by_acf = FALSE,
+  add_margin = FALSE,
+  fit_func = pryr::partial(fit_glm_log_,
+    simple_output = TRUE,
+    fit_CYT = FALSE, fit_offset = TRUE, fit_PS = TRUE),
+  return_alt = FALSE) {
+
+  args <- pick %>%
+    pan_IE_res_to_call_args() %>%
+    { . }
+  prep1 <- call_func(prep_cont_IE_analyses,
+    modifyList(args, list('permute_y' = F)))
+  dtf <- prep1$dtf
+  if (!is.null(dtf_mod_f)) {
+    dtf <- dtf_mod_f(dtf)
+  }
+
+  dtf <- dtf[order(i)]
+  fit <- fit_func(dtf)
+  fit$data$yr <- fit$data$c / fit$data$i
+
+  if (F && !is.null(pick$delta)) {
+    stopifnot(fit$delta == pick$delta)
+  }
+
+  p1 <- ggplot(fit$data, aes(x = ol, y = yr)) +
+    # ggrastr::rasterise(geom_point(alpha = .1, size = .3), dpi = 300) +
+    geom_point(alpha = .1, size = .3, color = 'grey10') +
+    ylab('Neo-antigen yield rate') +
+    xlab('Presentation score') +
+    theme()
+
+  if (T) {
+    if (all(names(coef(fit)) == c('(Intercept)',  'i', 'i:ol'))) {
+      median_TMB <- mean(fit$data$i)
+      median_TMB <- median(fit$data$i)
+      baseline_NAYR <- coef(fit)[['(Intercept)']] / median_TMB + 
+        coef(fit)[['i']]
+      slope_NAYR <- 1/median_TMB * coef(fit)[['i:ol']]
+      if (F) {
+        print(fit$data[, summary(c/i)])
+        print(mean(fit$data$c) / mean(fit$data$i))
+        print(baseline_NAYR)
+        print(summary(residuals(fit)))
+      }
+      # baseline_NAYR <- 
+      #   predict(fit, tibble(ol = 0, i = median_TMB)) / median_TMB
+      # edited_NAYR <- 
+      #   predict(fit, tibble(ol = 1, i = median_TMB)) / median_TMB
+      p1 <- p1 +
+        geom_abline(
+          intercept = baseline_NAYR,
+          slope =  slope_NAYR,
+          color = 'indianred3'
+        ) +
+        theme(legend.position = 'right')
+    }
+    if (!is.null(pick)) {
+      p_tit <- glue::glue('Baseline NAYR: {round(baseline_NAYR, 4)} \
+        delta NAYR: {round(pick$delta, 4)}')
+      p1 <- p1 + ggtitle(p_tit)
+    }
+  }
+
+  if (F) {
+    print_plot_eval(print(p1),
+      width = 6, height = 6,
+      filename = file.path(IE_img_dir, 'test.pdf'))
+  }
+
+  if (add_margin) {
+    pacman::p_load('ggExtra')
+    maartenutils::print_plot_eval(
+      call = 
+        { p1 <<- ggMarginal(p1, groupColour = FALSE, type = 'histogram',
+          colour = NA, groupFill = FALSE, size = 9) },
+      filename = paste0(tempfile(), '.pdf')
+    )
+  }
+
+  return(p1)
+}
+
+
+plot_ps_vs_tmb <- function(pick, ann_p_val = FALSE) { 
+  prep <- call_func(prep_cont_IE_analyses,
+    pan_IE_res_to_call_args(pick))
+  prep$dtf$i <- log10(prep$dtf$i + 1)
+
+  fit <- broom::tidy(lm(data = prep$dtf, i ~ ol))
+  fd <- fit$estimate[2] / fit$estimate[1]
+
+  p <- ggplot(prep$dtf, aes(y = i, x = ol)) +
+    geom_point(alpha = .1, size = .3, color = 'grey10') +
+    geom_smooth(method = 'lm') +
+    xlab('Presentation score') +
+    ylab('TMB\n(log10(x+1) transformed)') +
+    theme() +
+    ggtitle(glue::glue('delta TMB: {round(fd, 4)}'))
+
+  if (ann_p_val) {
+    p_val <- dplyr::filter(fit, term == 'ol') %>%
+      pull(p.value)
+    p <- p + annotate_npc(label = parse(text = fancy_p(p_val)), 
+      size = 2,
+      x = .95, y = .95, hjust = 1, vjust = 1)
+  }
+
+  return(p)
+}
+
+
+capitalize <- function(x) {
+  substr(x, 1, 1) <- toupper(substr(x, 1, 1))
+  return(x)
+}
+
+
+pick2print <- function(pick) {
+  pick <- recode_RNA_expression(pick)
+  l_id_vars <- setdiff(c(id_vars, 'RNA_expression'), c('project_extended', 'reg_method',
+      'z_normalize', 'processing_threshold', 'VE_threshold',
+      'expression_threshold'))
+  l_settings <- pick[, l_id_vars, with = F]
+  colnames(l_settings) <- var_titles[colnames(l_settings)]
+  l_settings <- unlist(map(l_settings, as.character))
+  l_settings <- 
+    l_settings[setdiff(match(var_titles, names(l_settings), nomatch = NULL), NA)]
+  out <- tibble::enframe(l_settings, name = 'coef_type', value = 'coef')
+  out <- format_coefs(out)
+  out$label <- NULL
+  colnames(out) <- c('setting', 'value')
+
+  out$value <- gsub('_', ' ', out$value)
+
+  if (F) {
+    idx <- which(out$setting == 'Tumor type')
+    # out$value[idx] <- stringr::str_to_title(out$value[idx])
+    out$value[idx] <- capitalize(out$value[idx])
+    idx <- which(out$setting == 'IT-resistant patients')
+    # out$value[idx] <- stringr::str_to_title(out$value[idx])
+    out$value[idx] <- capitalize(out$value[idx])
+  }
+
+  out$value <- purrr::map_chr(out$value, capitalize)
+  out$value[out$value == 'TRUE'] <- 'Yes'
+  out$value[out$value == 'FALSE'] <- 'No'
+
+  return(out)
+}
+# pick2print(f_setting_dtf[1, ])

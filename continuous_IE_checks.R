@@ -21,8 +21,8 @@ check_perm_q <- function(dtf) {
 }
 
 
-filter_coef_overview_ <- function(dtf, code,
-  print_messages = T) {
+filter_coef_overview_ <- function(dtf, code, stage_id = '',
+  print_messages = T, append_per_step_stats = TRUE) {
 
   code <- rlang::enquo(code)
   comp_before <- assess_coef_composition(dtf)
@@ -64,6 +64,15 @@ filter_coef_overview_ <- function(dtf, code,
 
   # return(list('dtf' = dtf, 'stats' = stats))
   attr(dtf, 'latest_stats') <- stats
+  if (append_per_step_stats) {
+    if (is.null(attr(dtf, 'per_step_stats'))) {
+      attr(dtf, 'per_step_stats') <- list()
+    }
+    i <- length(attr(dtf, 'per_step_stats')) + 1
+    attr(dtf, 'per_step_stats')[[i]] <- stats
+    names(attr(dtf, 'per_step_stats'))[i] <- stage_id
+
+  }
   return(dtf)
 }
 
@@ -115,17 +124,29 @@ filter_coef_overview <- function(
   dtf <- filter_coef_overview_(
     dtf = dtf,
     print_messages = print_messages,
-    code = !is.na(rc) & !is.na(intercept) & converged
+    stage_id = 'Non NA-coefficients',
+    code = !is.na(rc) & !is.na(intercept)
   )
   if (print_messages)
     print_overview_stats(dtf,
       plot_fishtails = plot_fishtails,
-      stage_id = 'Filtering non-converged sub-analyses'
+      stage_id = 'Non NA-coefficients'
     )
+
+  if ('converged' %in% colnames(dtf)) {
+    dtf <- filter_coef_overview_(
+      dtf = dtf,
+      print_messages = print_messages,
+      stage_id = 'Converged results',
+      code = converged == TRUE
+    )
+  }
+
 
   if (!is.null(max_delta_n_cov)) {
     dtf <- filter_coef_overview_(
       dtf = dtf,
+      stage_id = 'Delta cov',
       print_messages = print_messages,
       code = delta_n_cov <= max_delta_n_cov
     )
@@ -133,13 +154,14 @@ filter_coef_overview <- function(
       print_overview_stats(
         dtf = dtf,
         plot_fishtails = plot_fishtails,
-        stage_id = 'Delta cov filtering'
+        stage_id = 'Delta cov'
       )
   }
 
   if (!is.null(intercept_filter_p_val)) {
     dtf <- filter_coef_overview_(
       dtf = dtf,
+      stage_id = 'Intercept p-val',
       print_messages = print_messages,
       code = p_val_intercept <= intercept_filter_p_val
     )
@@ -147,7 +169,7 @@ filter_coef_overview <- function(
       print_overview_stats(
         dtf = dtf,
         plot_fishtails = plot_fishtails,
-        stage_id = 'Intercept p-val filtering'
+        stage_id = 'Intercept p-val'
       )
   }
 
@@ -155,18 +177,20 @@ filter_coef_overview <- function(
     dtf <- filter_coef_overview_(
       dtf = dtf,
       print_messages = print_messages,
+      stage_id = 'Intercept magnitude',
       code = abs(intercept) >= intercept_filter_magnitude
     )
     if (print_messages)
       print_overview_stats(dtf,
         plot_fishtails = plot_fishtails,
-        stage_id = 'Intercept magnitude filtering'
+        stage_id = 'Intercept magnitude'
       )
   }
 
   if (force_positive_intercept) {
     dtf <- filter_coef_overview_(
       print_messages = print_messages,
+      stage_id = 'Force positive intercept',
       dtf = dtf, code = intercept > 0
     )
     if (print_messages)
@@ -179,6 +203,7 @@ filter_coef_overview <- function(
   if (force_intercept_ge_rc) {
     dtf <- filter_coef_overview_(
       print_messages = print_messages,
+      stage_id = 'Force intercept >= rc',
       dtf = dtf, code = abs(intercept) >= abs(rc)
     )
     if (print_messages)
@@ -208,6 +233,7 @@ filter_coef_overview <- function(
     dtf <- filter_coef_overview_(
       dtf = dtf,
       print_messages = print_messages,
+      stage_id = 'Restrict to sensible permutation CI',
       code = perm_delta_CI_l_median < 0 & perm_delta_CI_h_median > 0
     )
     if (print_messages)
@@ -220,6 +246,7 @@ filter_coef_overview <- function(
   if (!is.null(delta_SE_filter)) {
     dtf <- filter_coef_overview_(
       dtf = dtf,
+      stage_id = 'delta_SE',
       print_messages = print_messages,
       code = delta_SE <= delta_SE_filter
     )
@@ -235,18 +262,20 @@ filter_coef_overview <- function(
     dtf <- filter_coef_overview_(
       dtf = dtf,
       print_messages = print_messages,
+      stage_id = 'After delta_c_SE',
       code = perm_delta_mean_c_SE <= delta_c_SE_filter
     )
     if (print_messages)
       print_overview_stats(dtf,
         plot_fishtails = plot_fishtails,
-        stage_id = 'After delta_c_SE filtering'
+        stage_id = 'After delta_c_SE'
       )
   }
 
   if (!is.null(norm_scale_filter)) {
     dtf <- filter_coef_overview_(
       dtf = dtf,
+      stage_id = 'Norm_scale',
       print_messages = print_messages,
       # code = abs(norm_scale) <= norm_scale_filter
       code = abs(scale) <= norm_scale_filter
@@ -254,7 +283,7 @@ filter_coef_overview <- function(
     if (print_messages)
       print_overview_stats(dtf,
         plot_fishtails = plot_fishtails,
-        stage_id = 'After norm_scale filtering'
+        stage_id = 'Norm_scale'
       )
   }
 
@@ -262,12 +291,13 @@ filter_coef_overview <- function(
     dtf <- filter_coef_overview_(
       dtf = dtf,
       print_messages = print_messages,
+      stage_id = 'scale_avg_norm',
       code = abs(scale_avg_norm) <= scale_avg_norm_filter
     )
     if (print_messages)
       print_overview_stats(dtf,
         plot_fishtails = plot_fishtails,
-        stage_id = 'After scale_avg_norm filtering'
+        stage_id = 'scale_avg_norm'
       )
   }
 
@@ -275,12 +305,13 @@ filter_coef_overview <- function(
     dtf <- filter_coef_overview_(
       dtf = dtf,
       print_messages = print_messages,
+      stage_id = 'NMADR_q75',
       code = NMADR_q75 <= NMADR_q75_filter
     )
     if (print_messages)
       print_overview_stats(dtf,
         plot_fishtails = plot_fishtails,
-        stage_id = 'After NMADR_q75 filtering'
+        stage_id = 'NMADR_q75'
       )
   }
 
@@ -288,12 +319,13 @@ filter_coef_overview <- function(
     dtf <- filter_coef_overview_(
       dtf = dtf,
       print_messages = print_messages,
+      stage_id = 'AFDP_50',
       code = AFDP_50 <= AFDP_50_filter
     )
     if (print_messages)
       print_overview_stats(dtf,
         plot_fishtails = plot_fishtails,
-        stage_id = 'After AFDP_50 filtering'
+        stage_id = 'AFDP_50'
       )
   }
 
@@ -301,12 +333,13 @@ filter_coef_overview <- function(
     dtf <- filter_coef_overview_(
       dtf = dtf,
       print_messages = print_messages,
+      stage_id = 'AFDP_75',
       code = AFDP_75 <= AFDP_75_filter
     )
     if (print_messages)
       print_overview_stats(dtf,
         plot_fishtails = plot_fishtails,
-        stage_id = 'After AFDP_75 filtering'
+        stage_id = 'AFDP_75'
       )
   }
 
@@ -314,12 +347,13 @@ filter_coef_overview <- function(
     dtf <- filter_coef_overview_(
       dtf = dtf,
       print_messages = print_messages,
+      stage_id = 'AFDP_90',
       code = AFDP_90 <= AFDP_90_filter
     )
     if (print_messages)
       print_overview_stats(dtf,
         plot_fishtails = plot_fishtails,
-        stage_id = 'After AFDP_90 filtering'
+        stage_id = 'AFDP_90'
       )
   }
 
@@ -334,13 +368,14 @@ filter_coef_overview <- function(
     print(thresh)
     dtf <- filter_coef_overview_(
       dtf = dtf,
+      stage_id = 'Adaptive norm_scale',
       print_messages = print_messages,
       code = abs(norm_scale) < thresh
     )
     if (print_messages)
       print_overview_stats(dtf,
         plot_fishtails = plot_fishtails,
-        stage_id = 'After adaptive norm_scale filtering'
+        stage_id = 'Adaptive norm_scale'
       )
   }
 
@@ -352,13 +387,14 @@ filter_coef_overview <- function(
     print(thresh)
     dtf <- filter_coef_overview_(
       dtf = dtf,
+      stage_id = 'Adaptive norm_scale',
       print_messages = print_messages,
       code = abs(norm_scale) < thresh
     )
     if (print_messages)
       print_overview_stats(dtf,
         plot_fishtails = plot_fishtails,
-        stage_id = 'After adaptive norm_scale filtering'
+        stage_id = 'Adaptive norm_scale'
       )
   }
 
@@ -371,12 +407,13 @@ filter_coef_overview <- function(
     dtf <- filter_coef_overview_(
       dtf = dtf,
       print_messages = print_messages,
+      stage_id = 'Adaptive NMADR_q50',
       code = abs(NMADR_q50) < thresh
     )
     if (print_messages)
       print_overview_stats(dtf,
         plot_fishtails = plot_fishtails,
-        stage_id = 'After adaptive NMADR_q50 filtering'
+        stage_id = 'Adaptive NMADR_q50'
       )
   }
 
@@ -388,13 +425,14 @@ filter_coef_overview <- function(
     cat('Required threshold inferred to be: ', thresh, '\n')
     dtf <- filter_coef_overview_(
       dtf = dtf,
+      stage_id = 'Adaptive NMADR_q75',
       print_messages = print_messages,
       code = abs(NMADR_q75) < thresh
     )
     if (print_messages)
       print_overview_stats(dtf,
         plot_fishtails = plot_fishtails,
-        stage_id = 'After adaptive NMADR_q75 filtering'
+        stage_id = 'Adaptive NMADR_q75'
       )
   }
 
@@ -407,12 +445,13 @@ filter_coef_overview <- function(
     dtf <- filter_coef_overview_(
       dtf = dtf,
       print_messages = print_messages,
+      stage_id = 'Adaptive delta_SE',
       code = delta_SE < thresh
     )
     if (print_messages)
       print_overview_stats(dtf,
         plot_fishtails = plot_fishtails,
-        stage_id = 'After adaptive delta_SE filtering'
+        stage_id = 'Adaptive delta_SE'
       )
   }
 
@@ -425,12 +464,13 @@ filter_coef_overview <- function(
     dtf <- filter_coef_overview_(
       dtf = dtf,
       print_messages = print_messages,
+      stage_id = 'Adaptive perm_delta_mean_c_SE',
       code = perm_delta_mean_c_SE < thresh
     )
     if (print_messages)
       print_overview_stats(dtf,
         plot_fishtails = plot_fishtails,
-        stage_id = 'After adaptive perm_delta_mean_c_SE filtering'
+        stage_id = 'Adaptive perm_delta_mean_c_SE'
       )
   }
 
@@ -441,12 +481,13 @@ filter_coef_overview <- function(
     dtf <- filter_coef_overview_(
       dtf = dtf,
       print_messages = print_messages,
+      stage_id = 'Minimum number of patients per analysis',
       code = n_patients >= min_patients
     )
     if (print_messages)
       print_overview_stats(dtf,
         plot_fishtails = plot_fishtails,
-        stage_id = 'Filtering minimum number of pts per analysis'
+        stage_id = 'Minimum number of patients per analysis'
       )
   }
 
@@ -458,15 +499,15 @@ filter_coef_overview <- function(
     dtf <- filter_coef_overview_(
       dtf = dtf,
       print_messages = print_messages,
+      stage_id = 'Minimum number of patients per analysis with non-zero neo-antigen load',
       code = n_nz_patients >= min_nz_patients
     )
     if (print_messages)
       print_overview_stats(dtf,
         plot_fishtails = plot_fishtails,
-        stage_id = 'Filtering minimum number of pts per analysis'
+        stage_id = 'Minimum number of patients per analysis with non-zero neo-antigen load'
       )
   }
-
 
   if (!is.null(min_project_size)) {
     project_counts <- dtf[, .N, by = project_extended]
@@ -476,6 +517,7 @@ filter_coef_overview <- function(
   }
 
   dtf[, tumor_type := tumor_types[as.character(project_extended)]]
+
   ## Order projects by mean perm_delta_mean_pc
   if (F) {
     pe <- dtf[,
@@ -495,7 +537,12 @@ filter_coef_overview <- function(
     pe <- dtf[, median(delta_n),
       by = .(tumor_type, project_extended)] %>%
       .[order(V1), .(project_extended, tumor_type, V1)]
+  } else if ('delta' %in% colnames(dtf)) {
+    pe <- dtf[, median(delta),
+      by = .(tumor_type, project_extended)] %>%
+      .[order(V1), .(project_extended, tumor_type, V1)]
   }
+  stopifnot(exists('pe'))
   if (print_messages) print(pe)
   dtf[, project_extended := factor(project_extended,
     levels = pe$project_extended)]
