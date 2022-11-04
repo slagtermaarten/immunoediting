@@ -1,3 +1,6 @@
+# getDTthreads()
+setDTthreads(1)
+
 IE_requires_computation <- mod_time_comparator(
   # minimum_mod_time = '2021-4-21 22:36', verbose = TRUE)
   # minimum_mod_time = '2021-4-23 13:51', verbose = TRUE)
@@ -8,7 +11,7 @@ IE_requires_computation <- mod_time_comparator(
   # minimum_mod_time = '2022-9-21 14:31', verbose = TRUE)
   # minimum_mod_time = '2022-10-03 14:31', verbose = TRUE)
   # minimum_mod_time = '2022-10-23 14:31', verbose = TRUE)
-  minimum_mod_time = '2022-11-03 14:31', verbose = TRUE)
+  minimum_mod_time = '2022-11-03 11:00', verbose = TRUE)
 # 2022-10-04 16:00 Implemented ACF stuff, but didn't bother to reset
 # timer while only a subset of analyses has run last night as I
 # probably won't need the ACF stuff and will focus on permutatation
@@ -880,8 +883,9 @@ fit_glm_ <- function(dtf, simple_output = FALSE,
     'n_patients' = dtf[, .N],
     ## High should mean good correspondence to linear model
     'deviance_red' = 1 - fit$deviance / fit$null.deviance,
-    'converged' = fit$converged
-    ) %>% { . }
+    'converged' = fit$converged,
+    'median_TMB' = median(fit$data$i)
+  ) %>% { . }
 
   ## This is rather fugly, but pragmatic..?
   p_index = 4
@@ -1003,7 +1007,6 @@ fit_glm_ <- function(dtf, simple_output = FALSE,
     out$ol_vs_i_rc_n <- coef(ps_fit)['ol'] / coef(ps_fit)['(Intercept)']
   }
 
-  out$median_TMB <- median(fit$data$i)
   if (fit_offset) {
     out$baseline_NAYR <- coef(fit)[['(Intercept)']] / out$median_TMB + 
       coef(fit)[['i']]
@@ -1404,7 +1407,6 @@ glm_fit_model <- function(
     perm_stats <- list()
   }
 
-
   out <-
     list(message = 'OK') %>%
     c(fit) %>%
@@ -1591,7 +1593,6 @@ test_continuous_IE <- function(
 
   if (include_call)
     f_args <- as.list(environment())
-
 
   o_fn <- gen_cont_IE_fn(
     base_name = 'cont-IE',
@@ -2277,6 +2278,7 @@ compile_all_coef_overview <- function(
   check_data_availability = F,
   skip_missing = F,
   N_downsample_settings = NULL,
+  exclude_rooney = TRUE,
   include_non_ds_tallies = (idxs_name != 'main_analysis')) {
 
   fa_flag <- paste0('-focus_hlas_', paste(hla_alleles,
@@ -2296,6 +2298,7 @@ compile_all_coef_overview <- function(
       {make_flag(reg_method)}\\
       {make_flag(ds_frac)}\\
       {make_flag(iter)}\\
+      {make_flag(exclude_rooney)}\\
       {make_flag(include_non_ds_tallies)}\\
       {make_flag(N_downsample_settings)}\\
       {make_flag(permute_id)}\\
@@ -2323,8 +2326,14 @@ compile_all_coef_overview <- function(
     { purrr::exec(tidyr::expand_grid, !!!.,
         focus_allele = hla_alleles) }
 
+  if (exclude_rooney) {
+    all_settings %<>% 
+      dplyr::filter(analysis_name != 'rooney_param_titration')
+  }
+
   if (!include_non_ds_tallies) {
-    all_settings %<>% filter(analysis_name == 'twoD_sens_analysis')
+    all_settings %<>% 
+      dplyr::filter(analysis_name == 'twoD_sens_analysis')
   }
 
   if (!is.null(focus_settings)) {

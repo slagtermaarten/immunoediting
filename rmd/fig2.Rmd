@@ -1,0 +1,148 @@
+```{r }
+source('~/antigenic_space/bin/init.R')
+```
+
+Pick a 'random' setting
+
+```{r }
+source(file.path(IE_root, 'continuous_IE_detection_init.R'))
+
+if (TRUE) {
+  ## Find a A0201 setting with all tumor types
+  l_id_vars <- setdiff(id_vars, c('tumor_type', 'project_extended'))
+  pick <- f_setting_dtf[
+    focus_allele == 'A0201' & analysis_name == 'twoD_sens_analysis' & 
+      expression_threshold == 'TPM=0' & 
+      patient_inclusion_crit == 'none' &
+      percentile_rank == '1.9' &
+      LOH_HLA == 'no_LOHHLA' &
+      TRUE, 
+    .N, by = l_id_vars][N == 20][order(N)][1]
+  prep_args <- pan_IE_res_to_call_args(pick)
+} else if (FALSE) {
+  pick <- f_setting_dtf[
+    analysis_name != 'rooney_param_titration' &
+      n_patients > 500] %>%
+      .[1] %>%
+      { . }
+    # f_setting_dtf[, .SD[1], keyby = id_vars]
+} else {
+  # Find the most basic settings
+  args <- map(auto_name(id_vars), ~f_setting_dtf[, levels(get(.x))[1]])
+  args$percentile_rank <- 1.9
+}
+
+if (F) {
+  args$project_extended <- "Cervix~HPV^{'+'}"
+  prep_args <- pan_IE_res_to_call_args(args)
+  prep_args$z_normalize = FALSE
+  dtf <- call_func(prep_cont_IE_analyses,
+    modifyList(prep_args, list('permute_y' = F)))$dtf
+  fit <- fit_glm_log_(dtf, simple_output = TRUE)
+}
+```
+
+Scatter plot
+
+```{r }
+source(file.path(IE_root, 'continuous_IE_detection_init.R'))
+
+## Make scatter for the pan-can case
+prep_args$project_extended <- "Pan*'-'*cancer"
+
+p1 <- 
+  # plot_subanalysis(pick = prep_args) + 
+  plot_subanalysis_yr_vs_ps(pick = prep_args)
+  # ggtitle('Pan-cancer') +
+  # # theme(legend.position = 'none')
+  # theme()
+
+# p1 <- qplot(1:10)
+
+print_plot_eval(print(p1),
+  # width = 8.7, 
+  width = 7, 
+  height = 5,
+  filename = file.path(IE_img_dir, 'example_scatter.pdf'))
+```
+
+Delta forest plot
+
+```{r }
+source(file.path(IE_root, 'continuous_IE_detection_init.R'))
+
+all_tts <- levels(f_setting_dtf$project_extended)
+
+N_reps = 10000
+
+t_dtf <- purrr::map_dfr(all_tts, function(tt) {
+  if (F) {
+    pick_l <- pick
+    pick_l$project_extended <- tt
+    
+    prep_args <- pick %>% 
+      pan_IE_res_to_call_args() %>%
+      # modifyList(list('analysis_idx' = 1)) %>%
+      { . }
+  } else {
+    prep_args <- args
+    prep_args$project_extended <- tt
+    prep_args <- pan_IE_res_to_call_args(prep_args)
+    prep_args$z_normalize = FALSE
+  }
+
+  dtf <- call_func(prep_cont_IE_analyses,
+    modifyList(prep_args, list('permute_y' = F)))$dtf
+  if (maartenutils::null_dat(dtf)) return(NULL)
+
+  fit <- fit_glm_log_(dtf, simple_output = TRUE, 
+    do_test_data_sufficiency = FALSE)
+  if (maartenutils::null_dat(fit)) return(NULL)
+
+  # coef(fit)['i:ol'] / coef(fit)['i']
+
+  sims <- MASS::mvrnorm(n = N_reps, mu = coef(fit), Sigma = vcov(fit))
+  sims_delta <- sims[, 'i:ol'] / sims[, 'i']
+  l <- setNames(quantile(sims_delta, c(.1, .5, .9)), 
+    c('CI_l', 'mean', 'CI_h')) %>%
+    as.list()
+  return(c(list('project_extended' = tt), l))
+  # return(c(list('project_extended' = tt), mean_CI(sims_delta)))
+})
+
+t_dtf <- setDT(t_dtf)[order(mean)]
+t_dtf$project_extended <- factor(t_dtf$project_extended, 
+  levels = unique(t_dtf$project_extended))
+```
+
+```{r }
+source(file.path(IE_root, 'continuous_IE_detection_init.R'))
+
+p2 <- ggplot(t_dtf, 
+  aes(x = project_extended, ymax = CI_h, ymin = CI_l, y = mean)) + 
+  coord_flip() +
+  geom_hline(yintercept = 0, color = 'grey10') +
+  scale_x_discrete(name = '', labels = parse(text =
+      levels(t_dtf$project_extended))) +
+  scale_y_continuous(name = '') +
+  geom_pointrange(size = .1) +
+  theme()
+
+library(patchwork)
+print_plot_eval(print(p1 / p2 + plot_layout(heights = c(.2, .8))),
+  width = 8.7, height = 10,
+  filename = file.path(IE_img_dir, 'example_forrest.pdf'))
+```
+
+
+```{r }
+plot_panel_layout(list(NA, NA, panB),
+                  layout = matrix(c(1, 2, 
+                                    3, 5, 
+                                    4, 4), 
+                                  ncol = 2, byrow = T),
+                  # heights = diff(c(0, 55, 130)),
+                  filename = file.path(IE_img_dir, 'fig2.pdf'),
+                  panel_padding = .1,
+                  w = 17.4, h = 25)
+```

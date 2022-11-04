@@ -1,4 +1,4 @@
-source(file.path(IE_root, 'load_optitype.R'))
+source(file.path(IE_root, 'R', 'load_optitype.R'))
 library(RPostgreSQL)
 library(glue)
 
@@ -670,7 +670,7 @@ pairwise_HLA_groups <- function(dtf,
                                 focus_allele = attr(dtf, 'ds_opts')$hla_allele, 
                                 ncores = 32) {
   doParallel::registerDoParallel(cores = ncores)
-  source('~/antigenic_space/maarten-analyses/immune_editing/load_optitype.R')
+  source(file.path(IE_root, 'R', 'load_optitype.R'))
 
   CS <- plyr::llply(all_hlas, function(x) {
     compute_pairwise_corroboration(focus_allele = focus_allele, 

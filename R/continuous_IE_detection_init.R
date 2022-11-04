@@ -2,6 +2,8 @@ library(RColorBrewer)
 library(magrittr)
 library(grDevices)
 library(purrr)
+IE_r_dir <- file.path(IE_root, 'R')
+
 ## Only load these packages when needed, loading can be slow
 if (!any(grepl('maartenutils', search()))) {
   devtools::load_all(file.path('~/libs', 'maartenutils'))
@@ -12,11 +14,11 @@ if (!any(grepl('fasanalysis', search()))) {
 # devtools::install_github('jokergoo/ComplexHeatmap')
 
 source('~/libs/result_cacher.R')
-source(file.path(IE_root, 'continuous_IE_detection_helpers.R'))
-source(file.path(IE_root, 'continuous_IE_checks.R'))
-source(file.path(IE_root, 'HLA_presentation_scores_helpers.R'))
-source(file.path(IE_root, 'pan_IE_settings_heatmap.R'))
-source(file.path(IE_root, 'IE_analysis.R'))
+source(file.path(IE_r_dir, 'continuous_IE_detection_helpers.R'))
+source(file.path(IE_r_dir, 'continuous_IE_checks.R'))
+source(file.path(IE_r_dir, 'HLA_presentation_scores_helpers.R'))
+source(file.path(IE_r_dir, 'pan_IE_settings_heatmap.R'))
+source(file.path(IE_r_dir, 'IE_analysis.R'))
 
 
 # all_cont_IE_settings <- tidyr::expand_grid(
@@ -36,8 +38,8 @@ all_cont_IE_settings <- tidyr::expand_grid(
   analysis_name = analysis_names
 )
 
-
 if (exists('setMKLthreads')) setMKLthreads(1)
+if (exists('setDTthreads')) setDTthreads(1)
 stopifnot(test_dplyr())
 
 datef <- format(Sys.time(), '%Y%m%d')
@@ -65,5 +67,3 @@ if (F) {
     unique %>%
     as.data.table
 }
-
-

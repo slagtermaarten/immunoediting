@@ -7,7 +7,7 @@ Assess variance across single settings, and combinations of settings.
 ```{r }
 source('~/antigenic_space/bin/init.R')
 
-source(file.path(IE_root, 'continuous_IE_detection_init.R'))
+source(file.path(IE_root, 'R', 'continuous_IE_detection_init.R'))
 
 reg_method = 'glm'
 reg_method = 'lmp'
@@ -15,10 +15,11 @@ reg_method = 'glm_log'
 ncores = 40
 ncores = 36
 ncores = 20
-ncores = 8
 ncores = 1
+ncores = floor(12 * 12/30)
 
-source(file.path(IE_root, 'continuous_IE_detection_init.R'))
+source(file.path(IE_root, 'R', 'continuous_IE_detection_init.R'))
+
 ## We filter based on the p-value of beta_y, which can fairly be
 ## assumed to be significant.
 setting_dtf <-
@@ -38,7 +39,6 @@ setting_dtf <-
 # duplicated(colnames(setting_dtf))
 # levels(setting_dtf$LOH_HLA)
 
-source(file.path(IE_root, 'continuous_IE_detection_init.R'))
 f_setting_dtf <-
   setting_dtf %>%
   filtering(
@@ -54,7 +54,6 @@ f_setting_dtf <-
     )
   )
 
-# source(file.path(IE_root, 'continuous_IE_detection_init.R'))
 p_setting_dtf <- pretty_overview_dtf(f_setting_dtf)
 
 test_opt_string_consistency(setting_dtf)
