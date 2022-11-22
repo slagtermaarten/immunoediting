@@ -11,7 +11,8 @@ IE_requires_computation <- mod_time_comparator(
   # minimum_mod_time = '2022-9-21 14:31', verbose = TRUE)
   # minimum_mod_time = '2022-10-03 14:31', verbose = TRUE)
   # minimum_mod_time = '2022-10-23 14:31', verbose = TRUE)
-  minimum_mod_time = '2022-11-03 11:00', verbose = TRUE)
+  # minimum_mod_time = '2022-11-03 11:00', verbose = TRUE)
+  minimum_mod_time = '2022-11-19 11:00', verbose = TRUE)
 # 2022-10-04 16:00 Implemented ACF stuff, but didn't bother to reset
 # timer while only a subset of analyses has run last night as I
 # probably won't need the ACF stuff and will focus on permutatation
@@ -364,7 +365,8 @@ test_data_sufficiency <- function(dtf,
 compute_dtf_stats <- function(dtf) {
   out <- list(
     'n_patients' = dtf[, .N],
-    'n_nz_patients' = dtf[c > 0, .N]
+    'n_nz_patients' = dtf[c > 0, .N],
+    'mean_yr' = mean(dtf[, c/i])
   )
   return(out)
 }
@@ -992,8 +994,8 @@ fit_glm_ <- function(dtf, simple_output = FALSE,
     out <- c(out, dw_test)
   }
 
-  out$baseline_yr <- coef(fit)[['(Intercept)']] + 
-        mean(fit$data$i) * coef(fit)[['i']]
+  # out$baseline_yr <- coef(fit)[['(Intercept)']] + 
+  #       mean(fit$data$i) * coef(fit)[['i']]
 
   if (diagnose) {
     leverage <- hatvalues(fit)
@@ -1659,7 +1661,6 @@ test_continuous_IE <- function(
       data_subs <- subset_project(prep$dtf, pe)
       if (null_dat(data_subs)) return(NULL)
       tryCatch({
-        source(file.path(IE_root, 'continuous_IE_detection_init.R'))
         compute_continuous_IE_statistics(
           dtf = data_subs,
           reg_method = reg_method,
@@ -1922,6 +1923,10 @@ prep_continuous_param_grid <- function(
   plot_ranges = NULL,
   ...) {
 
+  if (ncores > 1) {
+    doParallel::registerDoParallel(cores = ncores)
+  }
+
   dtf <- plyr::llply(analysis_idxs, function(analysis_idx) {
     dtf <- test_continuous_IE(
       focus_allele = focus_allele,
@@ -1989,7 +1994,7 @@ prep_continuous_param_grid <- function(
       .[, 'analysis_idx' := analysis_idx],
       error = function(e) { print(e); browser(); NULL })
     return(ret_val)
-  }, .parallel = (ncores > 1)) %>% rbindlist(fill = T)
+  }, .parallel = (T && ncores > 1)) %>% rbindlist(fill = T)
 
   if (null_dat(dtf) || ncol(dtf) == 2) return(NULL)
 
@@ -2212,6 +2217,17 @@ format_overview_res <- function(
       (perm_delta_mean_c_mean - perm_delta_mean_c_ci_l) / 1.96]
   }
 
+  if ('baseline_yr' %in% colnames(dtf)) {
+    dtf[, baseline_yr := NULL]
+  }
+
+  if ('offset' %in% colnames(dtf)) {
+    ## offset is \beta_0
+    ## intercept is \beta_r
+    ## rc is \beta_h
+    dtf[, delta := rc / (offset / median_TMB + intercept)]
+  }
+
   if ('perm_delta_pq' %in% colnames(dtf)) {
     dtf <- dtf[!is.na(perm_delta_pq)]
   }
@@ -2242,7 +2258,6 @@ format_overview_res <- function(
 
   dtf <- format_coef_overview_(dtf)
   dtf <- recode_RNA_expression(dtf)
-
 
   return(dtf)
 }

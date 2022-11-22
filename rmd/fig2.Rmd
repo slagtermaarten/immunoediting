@@ -2,23 +2,24 @@
 source('~/antigenic_space/bin/init.R')
 ```
 
-Pick a 'random' setting
+Pick the same 'basic' setting as used in the discrete patient group
+approach and run the coninuous IE analysis
 
 ```{r }
-source(file.path(IE_root, 'continuous_IE_detection_init.R'))
+source(file.path(IE_root, 'R', 'continuous_IE_detection_init.R'))
 
 if (TRUE) {
   ## Find a A0201 setting with all tumor types
   l_id_vars <- setdiff(id_vars, c('tumor_type', 'project_extended'))
   pick <- f_setting_dtf[
-    focus_allele == 'A0201' & analysis_name == 'twoD_sens_analysis' & 
-      expression_threshold == 'TPM=0' & 
+    focus_allele == 'A0201' & analysis_name == 'twoD_sens_analysis' &
+      expression_threshold == 'TPM=0' &
       patient_inclusion_crit == 'none' &
       percentile_rank == '1.9' &
       LOH_HLA == 'no_LOHHLA' &
-      TRUE, 
+      TRUE,
     .N, by = l_id_vars][N == 20][order(N)][1]
-  prep_args <- pan_IE_res_to_call_args(pick)
+  args <- pan_IE_res_to_call_args(pick)
 } else if (FALSE) {
   pick <- f_setting_dtf[
     analysis_name != 'rooney_param_titration' &
@@ -30,28 +31,44 @@ if (TRUE) {
   # Find the most basic settings
   args <- map(auto_name(id_vars), ~f_setting_dtf[, levels(get(.x))[1]])
   args$percentile_rank <- 1.9
+  ## Make scatter for the pan-can case
+  args$project_extended <- "Pan*'-'*cancer"
+  args$tumor_type <- NULL
 }
+args$z_normalize = FALSE
+args$reg_method = NULL
 
 if (F) {
   args$project_extended <- "Cervix~HPV^{'+'}"
   prep_args <- pan_IE_res_to_call_args(args)
-  prep_args$z_normalize = FALSE
   dtf <- call_func(prep_cont_IE_analyses,
     modifyList(prep_args, list('permute_y' = F)))$dtf
   fit <- fit_glm_log_(dtf, simple_output = TRUE)
 }
 ```
 
+Count the patients for the Methods
+
+```{r }
+args <- pick %>%
+  pan_IE_res_to_call_args() %>%
+  { . }
+prep1 <- call_func(prep_cont_IE_analyses,
+  modifyList(args, list('permute_y' = F)))
+dtf <- prep1$dtf
+dtf[, uniqueN(project_extended)]
+dtf[, uniqueN(donor_id)]
+```
+
 Scatter plot
 
 ```{r }
-source(file.path(IE_root, 'continuous_IE_detection_init.R'))
+source(file.path(IE_root, 'R', 'continuous_IE_detection_init.R'))
 
-## Make scatter for the pan-can case
-prep_args$project_extended <- "Pan*'-'*cancer"
+prep_args <- args
 
-p1 <- 
-  # plot_subanalysis(pick = prep_args) + 
+p1 <-
+  # plot_subanalysis(pick = prep_args) +
   plot_subanalysis_yr_vs_ps(pick = prep_args)
   # ggtitle('Pan-cancer') +
   # # theme(legend.position = 'none')
@@ -60,8 +77,8 @@ p1 <-
 # p1 <- qplot(1:10)
 
 print_plot_eval(print(p1),
-  # width = 8.7, 
-  width = 7, 
+  # width = 8.7,
+  width = 7,
   height = 5,
   filename = file.path(IE_img_dir, 'example_scatter.pdf'))
 ```
@@ -69,7 +86,7 @@ print_plot_eval(print(p1),
 Delta forest plot
 
 ```{r }
-source(file.path(IE_root, 'continuous_IE_detection_init.R'))
+source(file.path(IE_root, 'R', 'continuous_IE_detection_init.R'))
 
 all_tts <- levels(f_setting_dtf$project_extended)
 
@@ -79,8 +96,8 @@ t_dtf <- purrr::map_dfr(all_tts, function(tt) {
   if (F) {
     pick_l <- pick
     pick_l$project_extended <- tt
-    
-    prep_args <- pick %>% 
+
+    prep_args <- pick %>%
       pan_IE_res_to_call_args() %>%
       # modifyList(list('analysis_idx' = 1)) %>%
       { . }
@@ -95,31 +112,35 @@ t_dtf <- purrr::map_dfr(all_tts, function(tt) {
     modifyList(prep_args, list('permute_y' = F)))$dtf
   if (maartenutils::null_dat(dtf)) return(NULL)
 
-  fit <- fit_glm_log_(dtf, simple_output = TRUE, 
+  fit <- fit_glm_log_(dtf, simple_output = TRUE,
     do_test_data_sufficiency = FALSE)
+  median_TMB <- median(fit$data$i)
   if (maartenutils::null_dat(fit)) return(NULL)
 
   # coef(fit)['i:ol'] / coef(fit)['i']
 
   sims <- MASS::mvrnorm(n = N_reps, mu = coef(fit), Sigma = vcov(fit))
-  sims_delta <- sims[, 'i:ol'] / sims[, 'i']
-  l <- setNames(quantile(sims_delta, c(.1, .5, .9)), 
+  # sims_delta <- sims[, 'i:ol'] / sims[, 'i']
+  sims_delta <- sims[, 'i:ol'] / 
+    (sims[, '(Intercept)']/median_TMB + sims[, 'i'])
+  l <- setNames(quantile(sims_delta, c(.1, .5, .9)),
     c('CI_l', 'mean', 'CI_h')) %>%
     as.list()
-  return(c(list('project_extended' = tt), l))
+  delta <- compute_delta_w_offset(fit)
+  return(c(list('project_extended' = tt, 'delta' = delta), l))
   # return(c(list('project_extended' = tt), mean_CI(sims_delta)))
 })
 
-t_dtf <- setDT(t_dtf)[order(mean)]
-t_dtf$project_extended <- factor(t_dtf$project_extended, 
+t_dtf <- setDT(t_dtf)[order(delta)]
+t_dtf$project_extended <- factor(t_dtf$project_extended,
   levels = unique(t_dtf$project_extended))
 ```
 
 ```{r }
-source(file.path(IE_root, 'continuous_IE_detection_init.R'))
+source(file.path(IE_root, 'R', 'continuous_IE_detection_init.R'))
 
-p2 <- ggplot(t_dtf, 
-  aes(x = project_extended, ymax = CI_h, ymin = CI_l, y = mean)) + 
+p2 <- ggplot(t_dtf,
+  aes(x = project_extended, ymax = CI_h, ymin = CI_l, y = delta)) +
   coord_flip() +
   geom_hline(yintercept = 0, color = 'grey10') +
   scale_x_discrete(name = '', labels = parse(text =
@@ -137,9 +158,9 @@ print_plot_eval(print(p1 / p2 + plot_layout(heights = c(.2, .8))),
 
 ```{r }
 plot_panel_layout(list(NA, NA, panB),
-                  layout = matrix(c(1, 2, 
-                                    3, 5, 
-                                    4, 4), 
+                  layout = matrix(c(1, 2,
+                                    3, 5,
+                                    4, 4),
                                   ncol = 2, byrow = T),
                   # heights = diff(c(0, 55, 130)),
                   filename = file.path(IE_img_dir, 'fig2.pdf'),

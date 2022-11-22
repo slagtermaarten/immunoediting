@@ -178,3 +178,5 @@ if (F) {
   if (exists("ds")) rm(ds)
   if (exists("purity_f")) rm(purity_f)
 }
+
+pacman::p_load('svglite')

@@ -39,7 +39,10 @@ all_cont_IE_settings <- tidyr::expand_grid(
 )
 
 if (exists('setMKLthreads')) setMKLthreads(1)
-if (exists('setDTthreads')) setDTthreads(1)
+if (exists('setDTthreads')) {
+  setDTthreads(1)
+  stopifnot(getDTthreads() == 1)
+}
 stopifnot(test_dplyr())
 
 datef <- format(Sys.time(), '%Y%m%d')

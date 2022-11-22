@@ -2727,7 +2727,8 @@ CV_editing <- function(
     # sort_var = 'delta_n',
     sort_var = 'perm_delta_pq',
     verbose = T,
-    reverse = F
+    reverse = F,
+    min_N = 100
   ) {
 
   ## Prevent f_setting_dtf from getting messed up by setkeyv()
@@ -2748,7 +2749,6 @@ CV_editing <- function(
   if (TRUE) {
     ## Limit to settings that are observed both within the tumor type
     ## in question and the combination of all the other tumor types
-    min_N <- 100
     l_id_vars <- setdiff(id_vars, 'project_extended')
     tallies <- purrr::map(list(tt, other_tts),
       function(.x) {
@@ -2854,7 +2854,10 @@ CV_editing <- function(
     dtf_i_s <- subs
     dtf_i_s$type = 'Selected'
     ## ... unselected (us)
-    dtf_i_us <- dtf_i[!unique(subs[, ..id_vars])]
+    ## Lazy fix for bug with Thyroid, I'm not interested in dtf_i_us
+    ## ATM
+    # dtf_i_us <- dtf_i[!unique(subs[, ..id_vars])]
+    dtf_i_us <- dtf_i
   } else {
     dtf_i_s <- NULL
     dtf_i_us <- dtf_i
@@ -3199,7 +3202,7 @@ param_sensitivity <- function(dtf,
     })
 
   library(patchwork)
-  print_plot_eval(print(wrap_plots(p, ncol = 1,
+  print_plot_eval(print(patchwork::wrap_plots(p, ncol = 1,
         heights = map_dbl(IE_var_groups, length) %>% { ./sum(.) }
         # heights = c(.1, .9)
     )),
@@ -3615,36 +3618,41 @@ plot_overview_volcano <- function(
   dtf,
   effect_var = 'delta',
   p_var = 'p_val',
-  add_sig = TRUE,
-  p_eps = .025) {
+  # p_var_trans_f = function(x) -log10(x + 1e-5),
+  # p_var_trans_f = function(x) -log10(x),
+  p_var_trans_f = function(x) x,
+  geom_mod = function(x) ggrastr::rasterise(x, dpi = 300),
+  # geom_mod = identity,
+  add_sig = TRUE) {
 
   if (maartenutils::null_dat(dtf)) return(NULL)
 
   # dtf[which(dtf[[p_var]] < .05), ]
 
-  p_var_trans_f <- function(x) -log10(x + 1e-5)
-  p_var_trans_f <- function(x) x
-  p_var_trans_f <- function(x) -log10(x)
 
-  p_eps = .025
   p_eps = .01
+  p_eps = .025
+  p_eps = .05
   if (add_sig) {
-    pos_dtf <- data.table(
-      sign = c(-1L, -1L, -1L, 1L, 1L, 1L),
-      'sig' = c('neg', 'none', 'pos', 'neg', 'none', 'pos'),
-      xpos = c(p_eps, p_eps, p_eps, 1-p_eps, 1-p_eps, 1-p_eps),
-      ypos = c(p_eps, .5, 1-p_eps, p_eps, .5, 1-p_eps)
-    )
-    pos_dtf <- data.table(
-      sign = c(-1L, -1L, 1L, 1L),
-      'sig' = c('neg', 'none', 'neg', 'none'),
-      xpos = c(p_eps, p_eps, 1-p_eps, 1-p_eps),
-      ypos = c(p_eps, 1-p_eps, p_eps, 1-p_eps)
-    )
+    if (grepl('pq$', p_var)) {
+      positions <- data.table(
+        delta_sign = c(-1L, -1L, -1L, 1L, 1L, 1L),
+        'sig' = c('neg', 'none', 'pos', 'neg', 'none', 'pos'),
+        xpos = c(p_eps, p_eps, p_eps, 1-p_eps, 1-p_eps, 1-p_eps),
+        ypos = c(p_eps, .5, 1-p_eps, p_eps, .5, 1-p_eps)
+      )
+    } else {
+      positions <- data.table(
+        delta_sign = c(-1L, -1L, 1L, 1L),
+        'sig' = c('neg', 'none', 'neg', 'none'),
+        xpos = c(p_eps, p_eps, 1-p_eps, 1-p_eps),
+        ypos = c(p_eps, 1-p_eps, p_eps, 1-p_eps)
+      )
+    }
     quartile_tallies <-
       dtf[, .N, keyby = .(
         project_extended,
-        'sign' = sign(get(effect_var)),
+        'delta_sign' = sign(get(effect_var)),
         'sig' = ifelse(
           p_var_trans_f(get(p_var)) < p_var_trans_f(0.05),
           'neg',
@@ -3655,14 +3663,14 @@ plot_overview_volcano <- function(
 
     quartile_tallies$frac_f <-
       unlist(maartenutils::fancy_scientific(quartile_tallies$frac))
-    setkeyv(quartile_tallies, c('sign', 'sig'))
+    setkeyv(quartile_tallies, c('delta_sign', 'sig'))
     ## Left-join annotation coordinates
-    quartile_tallies <- quartile_tallies[pos_dtf]
+    quartile_tallies <- quartile_tallies[positions]
     quartile_tallies <- quartile_tallies[!is.na(project_extended)]
 
-    lower_thresh_dat <- quartile_tallies[sign == -1 & sig == 'neg'] %>%
+    lower_thresh_dat <- quartile_tallies[delta_sign == -1 & sig == 'neg'] %>%
       .[, yv := p_var_trans_f(.05)]
-    upper_thresh_dat <- quartile_tallies[sign == 1 & sig == 'pos'] %>%
+    upper_thresh_dat <- quartile_tallies[delta_sign == 1 & sig == 'pos'] %>%
       .[, yv := p_var_trans_f(.95)]
   }
 
@@ -3682,9 +3690,8 @@ plot_overview_volcano <- function(
   p_eps_x <- .01
   p <- p +
     geom_vline(xintercept = 0, color = 'grey10') +
-    ggrastr::rasterise(
-      geom_point(size = .1, alpha = .1, color = 'grey10'),
-      dpi = 300) +
+    # geom_density_2d_filled() +
+    geom_mod(geom_point(size = .01, alpha = .1, color = 'grey20')) +
     # geom_density_2d_filled() +
     coord_cartesian(
       ylim = quantile(dtf[['p_var_trans']], c(0, 1)),
@@ -3696,7 +3703,7 @@ plot_overview_volcano <- function(
       plot.margin = margin(.1, .1, .1, .1, 'cm')
     ) +
     ggpp::geom_text_npc(data = quartile_tallies,
-      inherit.aes = FALSE, color = 'indianred3', size = 2,
+      inherit.aes = FALSE, color = 'indianred3', size = 2.5,
       alpha = .95,
       parse = TRUE,
       mapping = aes(npcx = xpos, npcy = ypos, label = frac_f)) +
@@ -3882,7 +3889,7 @@ plot_CV_results <- function(CV_settings, yvar = 'delta_n', ranking = 'top') {
     # design <- 'AA
     # BC'
     # return(wrap_plots(p1, p2, p3, design = design))
-    return(wrap_plots(p4, p1))
+    return(patchwork::wrap_plots(p4, p1))
   })
 }
 
@@ -3894,11 +3901,13 @@ plot_CV_overview <- function(CV_settings) {
   ##     --> var
 
 
-  CV_settings[[3]][[2]]$sts_filtering
+  # CV_settings[[3]][[2]]$sts_filtering
 
   var_titles_l <- setNames(names(var_titles), var_titles)
   p_dat <-
-    map(CV_settings, ~ET2dtf(.x[['ET_i']], ES_name = 'ES_i')) %>%
+    purrr::map(CV_settings, ~.x[['ET_i']]) %>%
+    purrr::discard(is.null) %>%
+    purrr::map(~ET2dtf(.x, ES_name = 'ES_i')) %>%
     imap_dfr(~cbind(.x, 'project_extended' = .y)) %>%
     setDT() %>%
     .[, var_print := forcats::fct_recode(type, !!!var_titles_l)] %>%
@@ -3997,16 +4006,17 @@ plot_CV_overview <- function(CV_settings) {
       return(p)
     })
     if (N_plots < max_plots) {
-      white_space <- map(seq(1, max_plots - N_plots), ~plot_spacer())
+      white_space <- map(seq(1, max_plots - N_plots), ~
+        patchwork::plot_spacer())
     } else {
       white_space <- NULL
     }
     N_levs_norm <- N_levs %>% { . / sum(.) }
-    wrap_plots(c(plots, white_space),
+    patchwork::wrap_plots(c(plots, white_space),
       guides = 'collect',
       widths = c(1/max_plots * N_levs_norm,
         rep(1/max_plots, max_plots - N_plots))) +
-      plot_annotation(title = vg, caption = 'test')
+      patchwork::plot_annotation(title = vg, caption = 'test')
   })
 
   return(plot_lists)
@@ -4293,6 +4303,7 @@ plot_subanalysis_yr_vs_ps <- function(
     stopifnot(fit$delta == pick$delta)
   }
 
+
   p1 <- ggplot(fit$data, aes(x = ol, y = yr)) +
     # ggrastr::rasterise(geom_point(alpha = .1, size = .3), dpi = 300) +
     geom_point(alpha = .1, size = .3, color = 'grey10') +
@@ -4304,9 +4315,15 @@ plot_subanalysis_yr_vs_ps <- function(
     if (all(names(coef(fit)) == c('(Intercept)',  'i', 'i:ol'))) {
       median_TMB <- mean(fit$data$i)
       median_TMB <- median(fit$data$i)
-      baseline_NAYR <- coef(fit)[['(Intercept)']] / median_TMB + 
-        coef(fit)[['i']]
-      slope_NAYR <- 1/median_TMB * coef(fit)[['i:ol']]
+      delta <- with(as.list(coef(fit)), 
+        `i:ol` / (`(Intercept)`/median_TMB + `i`)
+      )
+      baseline_NAYR <- with(as.list(coef(fit)), 
+        (`(Intercept)`/median_TMB + `i`)
+      )
+      slope_NAYR <- with(as.list(coef(fit)), 
+        1/median_TMB * `i:ol`
+      )
       if (F) {
         print(fit$data[, summary(c/i)])
         print(mean(fit$data$c) / mean(fit$data$i))
@@ -4325,9 +4342,10 @@ plot_subanalysis_yr_vs_ps <- function(
         ) +
         theme(legend.position = 'right')
     }
+
     if (!is.null(pick)) {
       p_tit <- glue::glue('Baseline NAYR: {round(baseline_NAYR, 4)} \
-        delta NAYR: {round(pick$delta, 4)}')
+        delta NAYR: {round(delta, 4)}')
       p1 <- p1 + ggtitle(p_tit)
     }
   }
@@ -4419,3 +4437,20 @@ pick2print <- function(pick) {
   return(out)
 }
 # pick2print(f_setting_dtf[1, ])
+
+
+compute_delta_w_offset <- function(...) UseMethod('compute_delta_w_offset')
+ 
+
+compute_delta_w_offset.lm <- function(fit) {
+  compute_delta_w_offset(
+    l = as.list(coef(fit)), 
+    median_TMB = median(fit$data$i)
+  ) 
+}
+
+compute_delta_w_offset.list <- function(l, median_TMB = 1) {
+  with(l, 
+    `i:ol` / (`(Intercept)`/median_TMB + `i`)
+  )
+}
