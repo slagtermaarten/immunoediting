@@ -1,16 +1,15 @@
-source(file.path(IE_root, 'R', 'continuous_IE_detection_init.R'))
-
 reg_method = 'glm'
 reg_method = 'lmp'
 reg_method = 'glm_log'
 ncores = 40
 ncores = 36
 ncores = 20
-ncores = 1
 ncores = floor(12 * 12/30 * 12/30)
 ncores = floor(12 * 12/30)
+ncores = 1
 ncores = 24
 
+source(file.path(IE_root, 'R', 'continuous_IE_detection_init.R'))
 ## We filter based on the p-value of beta_y, which can fairly be
 ## assumed to be significant.
 setting_dtf <-

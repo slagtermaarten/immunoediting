@@ -8,13 +8,16 @@ IE_r_dir <- file.path(IE_root, 'R')
 if (!any(grepl('maartenutils', search()))) {
   devtools::load_all(file.path('~/libs', 'maartenutils'))
 }
-if (!any(grepl('fasanalysis', search()))) {
+if (!any(grepl('fasanalysis', search())) || T) {
   devtools::load_all(file.path('~/antigenic_space', 'libs', 'fasanalysis'))
 }
 # devtools::install_github('jokergoo/ComplexHeatmap')
 
 source('~/libs/result_cacher.R')
 source(file.path(IE_r_dir, 'continuous_IE_detection_helpers.R'))
+source(file.path(IE_r_dir, 'model_fit.R'))
+source(file.path(IE_r_dir, 'plotting.R'))
+source(file.path(IE_r_dir, 'cached_functions.R'))
 source(file.path(IE_r_dir, 'continuous_IE_checks.R'))
 source(file.path(IE_r_dir, 'HLA_presentation_scores_helpers.R'))
 source(file.path(IE_r_dir, 'pan_IE_settings_heatmap.R'))
@@ -35,7 +38,8 @@ all_cont_IE_settings <- tidyr::expand_grid(
   # patient_inclusion_crit = c('strict_TR', 'TR', ''),
   patient_inclusion_crit = c('none', 'FDR0.01', 'FDR1', 'FDR10'),
   LOH_HLA = c('no_LOHHLA', 'LOHHLA', 'strict_LOHHLA'),
-  analysis_name = analysis_names
+  analysis_name = c('SNV_param_titration', 'clon_param_titration',
+    'driv_ess_param_titration', 'marty_param_titration')
 )
 
 if (exists('setMKLthreads')) setMKLthreads(1)

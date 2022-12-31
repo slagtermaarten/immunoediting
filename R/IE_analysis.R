@@ -2315,8 +2315,9 @@ track_sum_stats_as_function_of_var <- function(
   p <- ggplot(t_dat,
     aes_string(x = track_var, y = 'value', group = 'group_id')) +
     # geom_point(alpha = .2, size = .5, color = my_grey) +
-    ggrastr::rasterise(geom_line(alpha = .1, color = my_grey),
-      dpi = 300) +
+    # ggrastr::rasterise(geom_line(alpha = .1, color = my_grey),
+    #   dpi = 500) +
+    geom_line(alpha = .1, color = my_grey) +
     geom_hline(yintercept = 0, color = 'grey20', size = .5) +
     geom_point(data = meds, alpha = .8, size = .7, color = 'black') +
     geom_line(data = meds, alpha = .8, size = .5, color = 'black') +
@@ -2344,8 +2345,12 @@ track_sum_stats_as_function_of_var <- function(
     w <- 17.4
   }
 
-  print_plot_eval(print(p),
-    width = w, height = h, filename = fn)
+  if (!is.null(fn)) {
+    print_plot_eval(print(p),
+      width = w, height = h, filename = fn)
+  } else {
+    return(p)
+  }
 }
 
 
@@ -3290,7 +3295,7 @@ plot_subanalysis <- function(
 
   p1 <- ggplot(fit$data,
     aes(x = i, y = c, colour = ol)) +
-    ggrastr::rasterise(geom_point(alpha = .3, size = .3), dpi = 300) +
+    ggrastr::rasterise(geom_point(alpha = .3, size = .3), dpi = 500) +
     scale_colour_gradient(low = cols[1], high = cols[2],
       name = 'Presentation\nscore', breaks = c(0, 0.1, .5, 1)) +
     ylab('Predicted\nneo-antigens\n(log10 + 1)') +
