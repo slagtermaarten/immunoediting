@@ -1317,6 +1317,9 @@ format_coef_overview_ <- function(dtf) {
   dtf$sts_filtering %<>% friendly_factor
   dtf$sts_filtering <- relevel(dtf$sts_filtering, 'FALSE')
   dtf$overlap_var %<>% friendly_factor
+  if ('patient_CYT' %in% colnames(dtf)) {
+    dtf$patient_CYT %<>% friendly_factor
+  }
   return(dtf)
 }
 

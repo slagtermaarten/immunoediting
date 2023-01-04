@@ -72,10 +72,10 @@ compile_all_coef_overview <- function(
       dplyr::filter(analysis_name != 'rooney_param_titration')
   }
 
-  if (!include_non_ds_tallies) {
-    all_settings %<>% 
-      dplyr::filter(analysis_name == 'twoD_sens_analysis')
-  }
+  # if (!include_non_ds_tallies) {
+  #   all_settings %<>% 
+  #     dplyr::filter(analysis_name == 'twoD_sens_analysis')
+  # }
 
   if (!is.null(focus_settings)) {
     setDT(all_settings)
@@ -145,6 +145,7 @@ compile_all_coef_overview <- function(
       analysis_name = r[['analysis_name']],
       overlap_var = r[['overlap_var']],
       patient_inclusion_crit = r[['patient_inclusion_crit']],
+      patient_CYT = r[['patient_CYT']],
       analysis_idxs = analysis_idxs,
       # hla_sim_range = hla_sim_range,
       redo = redo_subanalyses,
@@ -272,6 +273,7 @@ filter_bayesian_coef_overview <- function(
 test_continuous_IE <- function(
   overlap_var = 'mean_score',
   patient_inclusion_crit = 'none',
+  patient_CYT = 'all',
   LOH_HLA = 'no_LOHHLA',
   analysis_name = 'twoD_sens_analysis',
   focus_allele = 'A0201',
@@ -319,6 +321,7 @@ test_continuous_IE <- function(
     permute_input = permute_input,
     LOH_HLA = LOH_HLA,
     patient_inclusion_crit = patient_inclusion_crit,
+    patient_CYT = patient_CYT,
     overlap_var = overlap_var
   )
 
@@ -372,6 +375,7 @@ test_continuous_IE <- function(
     overlap_var = overlap_var,
     permute_input = permute_input,
     patient_inclusion_crit = patient_inclusion_crit,
+    patient_CYT = patient_CYT,
     ds_frac = ds_frac
   )
 
@@ -439,7 +443,7 @@ prep_cont_IE_analyses <- function() {
   if (is.null(obj_fn) || is.na(obj_fn) || length(obj_fn) == 0)
     return(NULL)
 
-  if (T) {
+  if (F) {
     browser()
     file.mtime(obj_fn)
   }
@@ -470,6 +474,16 @@ prep_cont_IE_analyses <- function() {
 
   ## Extract the  tumor projects present in this object
   dtf <- subset_project(dtf, project_extended)
+
+  if (patient_CYT != 'all') {
+    dtf <- merge_CYT(dtf)
+    CYT_threshold <- quantile(dtf$CYT, .75)
+    if (patient_CYT == '<=75') {
+      dtf <- dtf[CYT <= CYT_threshold]
+    } else if (patient_CYT == '>75') {
+      dtf <- dtf[CYT > CYT_threshold]
+    }
+  }
 
   ## Downsample patients
   if (!is.null(ds_frac)) {
@@ -517,9 +531,6 @@ prep_cont_IE_analyses <- function() {
     ), error = function(e) { print(e); browser() })
   dtf <- dtf[!is.na(ol)]
   valid_h_N <- dtf[, .N]
-
-  ## Annotate CYT, currently not used in model
-  dtf <- merge_CYT(dtf)
 
   ## Subset away non-completely HLA-loss annotated pts if required
   if ('LOHHLA_complete' %in% colnames(repertoire_overlap_dat) &&
@@ -604,6 +615,7 @@ prep_continuous_param_grid <- function(
   reg_method = 'rlm',
   LOH_HLA = F,
   patient_inclusion_crit = '',
+  patient_CYT = 'all',
   analysis_name = 'twoD_sens_analysis',
   proj_order = NULL,
   analysis_idxs = main_analysis_idxs,
@@ -639,6 +651,7 @@ prep_continuous_param_grid <- function(
       analysis_idx = analysis_idx,
       skip_missing = skip_missing,
       patient_inclusion_crit = patient_inclusion_crit,
+      patient_CYT = patient_CYT,
       overlap_var = overlap_var
     )
     if (null_dat(dtf)) return(NULL)

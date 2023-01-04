@@ -143,10 +143,10 @@ if (T) {
   source(file.path(ma_dir, 'immune_editing',
                    'continuous_IE_detection_init.R'))
   res <- compile_all_coef_overview(redo = redo,
-                                   ncores = ncores,
-                                   hla_alleles = hla_alleles_to_test,
-                                   repertoire_overlap_dat = repertoire_overlap_dat,
-                                   fn_suffix = fn_suffix)
+    ncores = ncores,
+    hla_alleles = hla_alleles_to_test,
+    repertoire_overlap_dat = repertoire_overlap_dat,
+    fn_suffix = fn_suffix)
   if (null_dat(res))
     stop('Run and complete compile_all_coef_overview first')
 }

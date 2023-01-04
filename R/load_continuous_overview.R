@@ -14,7 +14,7 @@ source(file.path(IE_root, 'R', 'continuous_IE_detection_init.R'))
 ## assumed to be significant.
 setting_dtf <-
   compile_all_coef_overview(
-    redo = F,
+    redo = T,
     redo_subanalyses = F,
     check_data_availability = F,
     skip_missing = F,

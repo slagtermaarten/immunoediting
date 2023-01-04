@@ -137,6 +137,7 @@ gen_cont_IE_fn <- function(
   permute_input = as.character(c()),
   extension = 'rds',
   z_normalize = F,
+  patient_CYT = 'all',
   patient_inclusion_crit = '') {
 
   if (!exists('base_name') || missing(base_name) ||
@@ -172,11 +173,17 @@ gen_cont_IE_fn <- function(
   permute_input <- ifelse(length(permute_input) == 0, '',
     paste0('-permute_input=', paste0(permute_input, collapse = '-')))
   extension <- prepend_string(extension, prepend_string = '.')
+  if (patient_CYT == 'all') {
+    patient_CYT = ''
+  } else {
+    patient_CYT = prepend_hyphen(patient_CYT)
+  }
 
   file_head <-
     tryCatch(paste0(
         base_name, tumor_type, analysis_name, focus_allele,
-        overlap_var, LOH_HLA, patient_inclusion_crit, reg_method,
+        overlap_var, LOH_HLA, patient_inclusion_crit, patient_CYT,
+        reg_method,
         p_val_bound, fill_var, hla_sim_range, z_normalize,
         analysis_idx, permute_input, extension),
       error = function(e) { print(e); browser() })
@@ -654,7 +661,8 @@ format_overview_res <- function(
 
   if ('analysis_name' %in% colnames(dtf)) {
     dtf[, analysis_name :=
-      factor(analysis_name, levels = analysis_names)]
+      factor(analysis_name, levels = c(analysis_names,
+          setdiff(analysis_names, unique(dtf$analysis_names))))]
   }
 
   if (!is.null(reg_method)) {

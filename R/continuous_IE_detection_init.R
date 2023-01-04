@@ -36,10 +36,12 @@ all_cont_IE_settings <- tidyr::expand_grid(
   focus_allele = focus_hlas,
   overlap_var = c('mean_score', 'mean_score_AB'),
   # patient_inclusion_crit = c('strict_TR', 'TR', ''),
+  patient_CYT = c('all', '>75', '<=75'),
   patient_inclusion_crit = c('none', 'FDR0.01', 'FDR1', 'FDR10'),
   LOH_HLA = c('no_LOHHLA', 'LOHHLA', 'strict_LOHHLA'),
   analysis_name = c('SNV_param_titration', 'clon_param_titration',
-    'driv_ess_param_titration', 'marty_param_titration')
+    'driv_ess_param_titration', 'marty_param_titration',
+    'indel_param_titration')
 )
 
 if (exists('setMKLthreads')) setMKLthreads(1)
