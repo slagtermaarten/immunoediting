@@ -1,0 +1,144 @@
+```{r }
+source('~/antigenic_space/bin/init.R')
+source(file.path(IE_root, 'R', 'load_continuous_overview.R'))
+```
+
+```{r }
+dtf <- map(focus_hlas, function(hla) {
+  out <- get_repertoire_overlap(hla_alleles = hla)[LOH_HLA == 'no_LOHHLA',
+    .(donor_id, mean_score, project, anchor_present)]
+  colnames(out)[2] <- paste0('mean_score_', hla)
+  colnames(out)[4] <- paste0('anchor_present_', hla)
+  return(out)
+}) %>%
+purrr::reduce(merge, by = c('donor_id', 'project'))
+```
+
+```{r }
+library(ComplexHeatmap)
+
+score_M <-
+  dplyr::select(dtf, matches('mean_score')) %>%
+  as.matrix %>%
+  {
+    set_colnames(.,
+      ppHLA(stringr::str_replace(colnames(.), 'mean_score_', '')))
+  }
+
+ap_M <-
+  dplyr::select(dtf, matches('anchor_present')) %>%
+  dplyr::mutate(across(everything(), as.numeric)) %>%
+  as.matrix %>%
+  {
+    set_colnames(.,
+      ppHLA(stringr::str_replace(colnames(.), 'anchor_present_', '')))
+  }
+
+print_plot_eval({ Heatmap(score_M, name = 'presentation score') + Heatmap(ap_M) },
+  width = 17.4, height = 10,
+  filename = file.path(IE_img_dir, 'ps_score_HM.pdf'))
+
+heatmap_fs <- 6
+heatmap_font <- NULL
+heatmap_font <- 'Arial'
+heatmap_font <- 'ArialMT'
+heatmap_font <- 'Helvetica'
+suppressPackageStartupMessages(library(ComplexHeatmap))
+ht_opt(
+  heatmap_row_names_gp = gpar(fontsize = heatmap_fs,
+    fontfamily = heatmap_font),
+  heatmap_row_title_gp = gpar(fontsize = heatmap_fs,
+    fontfamily = heatmap_font),
+  heatmap_column_names_gp = gpar(fontsize = heatmap_fs,
+    fontfamily = heatmap_font),
+  heatmap_column_title_gp = gpar(fontsize = heatmap_fs,
+    fontfamily = heatmap_font),
+  legend_title_gp = gpar(fontsize = heatmap_fs,
+    fontface = 'italic', fontfamily = heatmap_font),
+  legend_labels_gp = gpar(fontsize = heatmap_fs,
+    fontface = 'italic', fontfamily = heatmap_font),
+  legend_border = NA,
+  annotation_border = F,
+  heatmap_border = F
+)
+ht_opt$HEATMAP_LEGEND_PADDING = unit(1, 'cm')
+
+HM0 <- rowAnnotation(
+  df = dplyr::select(dtf, `Tumor type` = project),
+  annotation_name_gp = gpar(fontsize = heatmap_fs,
+    fontfamily = heatmap_font)
+)
+HM1 <- Heatmap(score_M,
+  row_title_rot = 0,
+  width = unit(5, 'cm'),
+  row_split = dplyr::select(dtf, project),
+  row_title = "%s",
+  name = 'Presentation\nscore')
+HM2 <- Heatmap(ap_M+1,
+  width = unit(2.5, 'cm'),
+  name = 'Anchor allele\npresent',
+  col = structure(1:2, names = c("1", "2"))
+)
+print_plot_eval({ draw( HM0 + HM1 + HM2) },
+  width = 17.4, height = 20,
+  filename = file.path(IE_img_dir, 'ps_score_HM.png'))
+```
+
+```{r }
+library(GGally)
+
+my_bin <- function(data, mapping, ...,
+  low = "#132B43", high = "#56B1F7") {
+  ggplot(data = data, mapping = mapping) +
+    geom_bin2d(..., show.legend = F) +
+    scale_fill_gradient(low = low, high = high)
+}
+my_hist <- function(data, mapping, ...,
+  low = "#132B43", high = "#56B1F7") {
+  ggplot(data = data, mapping = mapping) +
+    geom_histogram(..., show.legend = F, bins = 200)
+}
+p1 <- dtf %>%
+  as.data.frame() %>%
+  dplyr::select(matches('mean_score')) %>%
+  {
+    set_colnames(.,
+      ppHLA(stringr::str_replace(colnames(.), 'mean_score_', '')))
+  } %>%
+  ggpairs(
+    lower = list(
+      continuous = my_bin
+    ),
+    diag = list(
+      continuous = my_hist
+    )
+  )
+print_plot_eval({ print(p1) },
+  width = 17.4, height = 20,
+  filename = file.path(IE_img_dir, 'ps_score_scatter.png'))
+
+
+label_panel <- function(l = 'A') {
+  grid.text(l, x = .05, y = .9,
+    gp = gpar(fontface = 'bold', fontsize = 8))
+}
+print_plot_eval({
+pushViewport(viewport(x = 0.0, y = 1, width = 1, height = 0.5, just = c("left", "top")))
+label_panel('A')
+pushViewport(viewport(x = 0.1, y = .9, width = .8, height = .8, just = c("left", "top")))
+draw(HM0 + HM1 + HM2, newpage = F)
+popViewport()
+popViewport()
+##
+pushViewport(viewport(x = 0.0, y = .5, width = 1, height = 0.5, just = c("left", "top")))
+label_panel('B')
+pushViewport(viewport(x = 0.1, y = .9, width = .8, height = .8, just = c("left", "top")))
+print(p1, newpage = F)
+popViewport()
+popViewport()
+},
+  width = 17.4, height = 25,
+  filename = file.path(IE_img_dir, 'figSX_ps_score.pdf'))
+```
+
+
